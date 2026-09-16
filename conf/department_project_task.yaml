@@ -1,0 +1,32 @@
+# Department -> (project_id, task_id) mapping.
+#
+# This MIRRORS the two custom fields in the Dayforce Report Writer report
+# ("Project ID" and "Task ID"), both of which are CASE expressions over
+# Department.XRefCode:
+#
+#   Project ID = CASE Department.XRefCode
+#                  'BTSI_LEARNINGLOGICS'     -> 96731
+#                  'BTSI_SERVICES'           -> 96732
+#                  'BTSI_SIMULATION_PRODUCT' -> 96731
+#                  ELSE NULL
+#   Task ID    = CASE Department.XRefCode
+#                  'BTSI_LEARNINGLOGICS'     -> 3431179
+#                  'BTSI_SERVICES'           -> 3431175
+#                  'BTSI_SIMULATION_PRODUCT' -> 3431179
+#                  ELSE NULL
+#
+# project_id / task_id are NetSuite internal IDs, not Dayforce values.
+# A department NOT listed here is out of scope (the report's ELSE NULL) and its
+# employees / TAFW records are dropped.
+#
+# KEEP THIS FILE IN SYNC WITH THE DAYFORCE REPORT.
+
+BTSI_LEARNINGLOGICS:
+  project_id: 96731
+  task_id: 3431179
+BTSI_SERVICES:
+  project_id: 96732
+  task_id: 3431175
+BTSI_SIMULATION_PRODUCT:
+  project_id: 96731
+  task_id: 3431179

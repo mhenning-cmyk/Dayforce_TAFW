@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tafw-ingest"
+version = "0.1.0"
+description = "Dayforce TAFW -> Databricks staging ingestion service"
+requires-python = ">=3.11,<3.12"
+readme = "README.md"
+
+# Runtime dependencies are pinned in requirements.txt (installed on the
+# Databricks job cluster / local venv). This list is intentionally loose so
+# `pip install -e .` works against whatever the pinned file already resolved.
+dependencies = [
+    "requests",
+    "urllib3",
+    "tenacity",
+    "pyrate-limiter",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "python-dotenv",
+    "python-dateutil",
+    "pyyaml",
+    "structlog",
+]
+
+[project.optional-dependencies]
+# Local Spark + Delta so the MERGE path can be exercised without a cluster.
+localspark = ["pyspark==3.5.3", "delta-spark==3.2.0"]
+
+[project.scripts]
+tafw-ingest = "tafw_ingest.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+src = ["src", "tests"]
+# Databricks notebook source files use injected globals (spark, dbutils, display)
+# and %magic lines - they are not importable modules, so don't lint them.
+extend-exclude = ["notebooks", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["tafw_ingest"]
+mypy_path = "src"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["pyspark.*", "delta.*", "yaml"]
+ignore_missing_imports = true

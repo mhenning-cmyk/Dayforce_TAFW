@@ -1,0 +1,78 @@
+# =============================================================================
+# Dayforce TAFW -> Databricks Ingestion Service
+# =============================================================================
+# Architecture (post-meeting revision):
+#   - Runs as a Databricks Job (Python task / notebook), NOT Azure Functions.
+#   - Staging "system of record" is a Delta table in Databricks, NOT PostgreSQL.
+#   - Pulls TAFW data per-employee from the Dayforce REST API, paces requests
+#     to stay under ~100 calls/min, builds a deterministic per-record hash
+#     (EmployeeXRefCode + PTO date + approval/type code + hours requested),
+#     then MERGEs the reconciled rows into the Databricks staging table.
+#
+# Python: 3.11+ (matches Databricks Runtime 15.x LTS).
+# hashlib / hmac / json / datetime are in the standard library - no package needed.
+#
+# Install:  pip install -r requirements.txt
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# Dayforce API client: HTTP, retries, and rate limiting
+# ---------------------------------------------------------------------------
+requests==2.32.3                 # HTTP client for the Dayforce REST API
+urllib3==2.2.3                   # transport-level Retry/backoff config for requests
+tenacity==9.0.0                  # declarative retry (429 / 5xx / transient network)
+pyrate-limiter==3.7.0            # token-bucket pacing to hold under Dayforce's ~100 req/min
+requests-oauthlib==2.0.0         # only if your Dayforce tenant uses OAuth2 client-credentials
+                                 # (plain HTTP Basic auth needs nothing beyond requests)
+
+# ---------------------------------------------------------------------------
+# Configuration & secret management
+# ---------------------------------------------------------------------------
+pydantic==2.10.4                # typed models for API responses + config validation
+pydantic-settings==2.7.1        # load settings from env vars / Databricks job params
+python-dotenv==1.0.1            # local .env loading for dev runs outside Databricks
+azure-identity==1.19.0          # service-principal / managed-identity auth to Azure + Key Vault
+azure-keyvault-secrets==4.9.0   # pull Dayforce credentials from Bluedrop's Key Vault
+
+# ---------------------------------------------------------------------------
+# Data shaping & deterministic hashing
+# ---------------------------------------------------------------------------
+pandas==2.2.3                   # normalize per-employee payloads into a flat day-record frame
+pyarrow==18.1.0                 # pandas <-> Spark/Delta interchange; Parquet typing
+python-dateutil==2.9.0.post0    # parse Dayforce timestamp/offset formats robustly
+
+# ---------------------------------------------------------------------------
+# Databricks: write the reconciled staging table
+# ---------------------------------------------------------------------------
+databricks-sql-connector==3.7.0 # run MERGE/UPSERT against the staging Delta table via a SQL Warehouse
+databricks-sdk==0.40.0          # workspace/job/secret-scope automation and unified auth
+
+# ---------------------------------------------------------------------------
+# Logging / monitoring
+# ---------------------------------------------------------------------------
+structlog==24.4.0               # structured JSON logs (cycle counts, call volume, drift)
+
+# ---------------------------------------------------------------------------
+# OPTIONAL - local development against Spark/Delta without a live cluster.
+# On a Databricks cluster these are already provided; keep them here only if
+# you run/test the transform + MERGE logic locally.
+# ---------------------------------------------------------------------------
+# pyspark==3.5.4
+# delta-spark==3.3.0
+# databricks-connect==15.4.5     # must match your Databricks Runtime version exactly
+
+# ---------------------------------------------------------------------------
+# Development & test tooling
+# ---------------------------------------------------------------------------
+pytest==8.3.4
+pytest-cov==6.0.0
+requests-mock==1.12.1           # stub Dayforce endpoints in unit tests
+responses==0.25.3               # alternative HTTP stubbing style
+freezegun==1.5.1                # freeze time for deterministic hash/cycle tests
+ruff==0.8.4                     # lint + format
+mypy==1.14.0
+types-requests==2.32.0.20241016
+types-python-dateutil==2.9.0.20241206
+types-PyYAML==6.0.12.20240917
+pandas-stubs==2.2.3.241126

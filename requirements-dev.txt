@@ -1,0 +1,36 @@
+# =============================================================================
+# Local development extras (NOT installed on the Databricks job cluster).
+#   pip install -r requirements.txt -r requirements-dev.txt
+# =============================================================================
+
+# Editable install of this package so `import tafw_ingest` works everywhere
+# (tests, notebooks, REPL) without sys.path hacks.
+-e .
+
+# --- Local credential storage ---------------------------------------------
+# Settings.from_env() falls back to the OS keyring (Windows Credential Locker)
+# for the Dayforce username/password. Set them once:
+#   keyring set dayforce-tafw username
+#   keyring set dayforce-tafw password
+keyring==25.7.0
+
+# --- Local notebook kernel --------------------------------------------------
+ipykernel==6.29.5
+
+# --- Local Spark + Delta --------------------------------------------------
+# Lets tafw_ingest.staging.LocalDeltaStagingWriter run a real MERGE against a
+# local Delta table with no cluster. Pin to the SAME Spark/Delta line as the
+# target Databricks Runtime and re-confirm once workspace access exists.
+#   DBR 15.4 LTS  ->  Spark 3.5.x, Delta 3.2.x
+# Requires a local JDK 17 (Temurin). On Windows this also needs Hadoop
+# `winutils`; running it under WSL/Linux is smoother. If that is a hassle,
+# skip these and develop against InMemoryStagingWriter (the default).
+pyspark==3.5.3
+delta-spark==3.2.0
+
+# --- Optional: a fake Dayforce API for end-to-end local runs --------------
+Flask==3.1.0
+
+# NOTE: do NOT add databricks-connect here yet - it conflicts with pyspark in
+# the same venv and needs live workspace auth. In Phase 2 it REPLACES the two
+# pins above (and `pip uninstall pyspark delta-spark` first).
