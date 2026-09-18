@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tafw-ingest"
 version = "0.1.0"
 description = "Dayforce TAFW -> Databricks staging ingestion service"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11"
 readme = "README.md"
 
 # Runtime dependencies are pinned in requirements.txt (installed on the
