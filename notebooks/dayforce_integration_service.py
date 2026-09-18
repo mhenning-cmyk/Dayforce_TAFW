@@ -23,10 +23,7 @@ from tafw_ingest import employees
 from tafw_ingest.config import Settings
 from tafw_ingest.dayforce_client import DayforceClient
 from tafw_ingest.department_map import DepartmentMap
-from tafw_ingest.employee_department_queries import (
-    CREATE_EMPLOYEE_DEPARTMENT_TABLE_SQL,
-    MERGE_EMPLOYEE_DEPARTMENT_SQL,
-)
+from tafw_ingest.employee_department_queries import MERGE_EMPLOYEE_DEPARTMENT_SQL
 
 if IN_DATABRICKS:
     # Databricks: no local repo file to rely on - secrets come from the
@@ -59,8 +56,9 @@ print(employees_df.head(n=10))
 
 print('Done')
 
-######## Testing Only: Filter for hte top 3 rows ###########
-employees_df = employees_df.iloc[0:3]
+#### Testing select a subset 
+employees_df = employees_df.iloc[0:9]
+
 
 #Step 2, Get the department and projects for all of these employees
 dept_map = DepartmentMap.load()  # load once - each lookup below would otherwise re-read the YAML
@@ -91,10 +89,13 @@ employee_department_rows = list(
 employee_department_df = pd.DataFrame(employee_department_rows).astype(
     {"ProjectId": "Int64", "TaskId": "Int64"}
 )
+
+#Remove any records where the Project ID is null
+employee_department_df = employee_department_df[employee_department_df["ProjectId"].notna()].reset_index(drop = True)
 print(employee_department_df)
 
 #Step 3. Upsert to employees table in databricks
-EMPLOYEE_DEPARTMENT_TABLE = "staging.employee_department_task"
+EMPLOYEE_DEPARTMENT_TABLE = "tafw.tafw_records.employees"
 
 if IN_DATABRICKS:
     # `spark` is injected by Databricks, same as `dbutils` above - never
@@ -115,13 +116,9 @@ if IN_DATABRICKS:
     source = spark.createDataFrame(employee_department_rows, schema=schema)  # noqa: F821
     source.createOrReplaceTempView("_employee_department_updates")
 
-    create_table_sql = CREATE_EMPLOYEE_DEPARTMENT_TABLE_SQL.format(
-        table=EMPLOYEE_DEPARTMENT_TABLE
-    )
     merge_sql = MERGE_EMPLOYEE_DEPARTMENT_SQL.format(
         table=EMPLOYEE_DEPARTMENT_TABLE, source="_employee_department_updates"
     )
-    spark.sql(create_table_sql)  # noqa: F821
     spark.sql(merge_sql)  # noqa: F821
     spark.catalog.dropTempView("_employee_department_updates")  # noqa: F821
     print(f"Merged {len(employee_department_rows)} row(s) into {EMPLOYEE_DEPARTMENT_TABLE}")
