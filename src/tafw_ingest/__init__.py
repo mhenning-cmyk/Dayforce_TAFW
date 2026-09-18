@@ -6,6 +6,7 @@ Public surface:
 * :mod:`tafw_ingest.dayforce_client` - :class:`DayforceClient` REST wrapper
 * :mod:`tafw_ingest.employees`   - paginate ``GET /Employees`` -> pandas DataFrame
 * :mod:`tafw_ingest.department_map` - Department XRefCode -> (project_id, task_id)
+* :mod:`tafw_ingest.employee_department_queries` - SQL for the employee/dept/project/task staging table
 * :mod:`tafw_ingest.roster`      - narrow the roster to in-scope departments
 * :mod:`tafw_ingest.normalize`   - raw TAFW JSON -> :class:`DayRecord` list
 * :mod:`tafw_ingest.hashing`     - the frozen deterministic record-hash spec

@@ -32,6 +32,9 @@ requests-oauthlib==2.0.0         # only if your Dayforce tenant uses OAuth2 clie
 pydantic==2.10.4                # typed models for API responses + config validation
 pydantic-settings==2.7.1        # load settings from env vars / Databricks job params
 python-dotenv==1.0.1            # local .env loading for dev runs outside Databricks
+keyring==25.7.0                 # local dev only: Settings.from_env reads Dayforce creds
+                                 # from the OS keyring (service "dayforce-tafw"); Databricks
+                                 # uses Settings.from_databricks' secret scope instead
 azure-identity==1.19.0          # service-principal / managed-identity auth to Azure + Key Vault
 azure-keyvault-secrets==4.9.0   # pull Dayforce credentials from Bluedrop's Key Vault
 

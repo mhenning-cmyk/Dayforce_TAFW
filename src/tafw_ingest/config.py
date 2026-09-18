@@ -87,11 +87,16 @@ class Settings(BaseSettings):
     dayforce_test_mode: bool = False
 
     # --- pacing / windows ---
-    dayforce_max_rpm: int = Field(90, ge=1, le=1000)
+    # Dayforce's documented ceiling is 10 req/sec and 100 req/min, applied at
+    # the whole-client level (see tafw_ingest.dayforce_client's module
+    # docstring) - the le= bounds here keep a misconfigured value from
+    # exceeding that ceiling outright. Turn these down further if another
+    # integration shares this Dayforce client/service account.
+    dayforce_max_rps: int = Field(8, ge=1, le=10)
+    dayforce_max_rpm: int = Field(90, ge=1, le=100)
     dayforce_throttle_seconds: float = Field(0.2, ge=0)
     tafw_lookback_days: int = Field(30, ge=0)
     tafw_horizon_days: int = Field(90, ge=1)
-    tafw_window_days: int = Field(30, ge=1, le=31)
     tafw_statuses: CsvList = ["APPROVED"]
     tafw_employee_xrefs: CsvList = []
     tafw_expand_multi_day: bool = False
@@ -162,7 +167,7 @@ class Settings(BaseSettings):
 
         Expected widgets (all optional, sensible defaults): ``run_mode``,
         ``lookback_days``, ``horizon_days``, ``statuses``, ``employee_xrefs``,
-        ``staging_table``, ``max_rpm``, ``expand_multi_day``.
+        ``staging_table``, ``max_rps``, ``max_rpm``, ``expand_multi_day``.
 
         Expected secrets in ``secret_scope``: ``username``, ``password``,
         optionally ``company``, ``base_uri``.
@@ -193,7 +198,7 @@ class Settings(BaseSettings):
         for widget_name, field_name in {
             "lookback_days": "tafw_lookback_days",
             "horizon_days": "tafw_horizon_days",
-            "window_days": "tafw_window_days",
+            "max_rps": "dayforce_max_rps",
             "max_rpm": "dayforce_max_rpm",
             "statuses": "tafw_statuses",
             "employee_xrefs": "tafw_employee_xrefs",

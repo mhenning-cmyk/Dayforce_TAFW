@@ -4,20 +4,20 @@
 #
 # Precedence (low -> high): this file < keyring (creds only) < env / .env < kwargs.
 
-# Dayforce CANTest261 test tenant. Endpoint root resolves to:
-#   https://cantest261-services.dayforcehcm.com/api/bluedrop/v1/Employees
-dayforce_base_uri: https://cantest261-services.dayforcehcm.com/api
+# Dayforce CANTest262 test tenant. Endpoint root resolves to:
+#   https://cantest262.dayforcehcm.com/api/bluedrop/v1/Employees
+dayforce_base_uri: https://cantest262.dayforcehcm.com/api
 dayforce_company: bluedrop
 dayforce_api_version: v1
 dayforce_auth_mode: basic
 dayforce_test_mode: true
 
+dayforce_max_rps: 8
 dayforce_max_rpm: 90
 dayforce_throttle_seconds: 0.2
 
 tafw_lookback_days: 30
 tafw_horizon_days: 90
-tafw_window_days: 30
 tafw_statuses: [APPROVED,CANCELED]
 tafw_employee_xrefs: []
 tafw_expand_multi_day: false

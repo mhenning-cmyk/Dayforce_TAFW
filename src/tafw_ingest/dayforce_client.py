@@ -7,11 +7,52 @@ behaviour, retargeted at feeding the Databricks staging table:
   Dayforce's discovery-host redirect** (``requests`` drops it by default).
 * urllib3 ``Retry`` with exponential backoff on 429 / 5xx / connection errors,
   honouring ``Retry-After``.
-* A process-wide token-bucket rate limiter (``pyrate_limiter``) capping request
-  rate under Dayforce's published ~100 req/min, plus a small floor sleep.
-* The ``TimeAwayFromWork`` endpoint accepts at most a 31-day window, so
-  :meth:`iter_tafw_records` fans a sync out across consecutive windows spanning
-  ``lookback_days`` back to ``horizon_days`` forward.
+* :meth:`iter_tafw_records` queries the whole ``lookback_days`` back to
+  ``horizon_days`` forward span in one request per employee/status; the
+  endpoint was assumed to cap windows at 31 days (inherited, uncited, from
+  the original ``bluedrop-mavenlink-sync`` client) but live testing against
+  a full year showed that limit doesn't hold, so this client no longer
+  chunks the date range itself. ``get_tafw_records_for_employee`` still
+  follows ``Paging.Next`` for large result sets within one query.
+
+Rate limiting
+-------------
+Per Dayforce's "RESTful Rate Limiter" guide (help.dayforce.com, under
+Dayforce-Web-Services-Introduction-Guide/RESTful-Rate-Limiter):
+
+* The published ceiling is **10 requests/second and 100 requests/minute**,
+  described in terms of "employee XRefCodes" - i.e. each employee-scoped call
+  (``Employees/{xref}/...``) counts as one unit. Heavier operations (the doc
+  names ``Get Reports``) have a lower, unspecified threshold.
+* The limit applies **at the client level** (the whole service-account/tenant
+  pairing), not per user or per endpoint - if another integration shares this
+  Dayforce client, this service is not entitled to the full budget alone.
+  ``dayforce_max_rps`` / ``dayforce_max_rpm`` should be turned down to leave
+  that other integration room.
+* Dayforce does **not** document a guaranteed HTTP 429 or ``Retry-After``
+  header for a denial - only that an over-limit request "will be denied ...
+  with a message noting that the limit has been reached." The guide asks
+  consuming applications to (a) track their own request count and stay under
+  the limit rather than relying on being told off, and (b) queue/back off
+  when denied rather than failing outright.
+
+This client follows both halves of that:
+
+* A dual-tier token-bucket limiter (``pyrate_limiter``, 10/sec AND 100/min,
+  configurable and clamped below those ceilings - see ``max_rps``/``max_rpm``)
+  gates every request *before* it is sent, so we typically never hit the
+  server-side limit at all. When the bucket is full it sleeps until a slot
+  frees up (bounded by ``_RATE_LIMIT_MAX_QUEUE_DELAY_MS``) rather than
+  raising, i.e. it queues by default.
+* Because a denial's shape isn't guaranteed, ``_get`` also inspects the body
+  of an *ok* (2xx) response for rate-limit language and treats that the same
+  as a 429 would be: back off and retry (bounded by
+  ``MAX_RATE_LIMIT_RETRIES``), rather than trusting it as real data.
+* A large batch (many employees) is expected to take a while - Dayforce's own
+  example is ~60 minutes for 6,000 employees at 100/min - so this is paced by
+  simple sequential blocking, not by a single request. Callers should not add
+  concurrency (threads/async) around this client without routing it through
+  the same shared limiter, or the rate guarantee no longer holds.
 
 Endpoints used:
     GET  {base}/{company}/V1/Employees                     - roster
@@ -27,7 +68,13 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import requests
-from pyrate_limiter import Duration, Limiter, Rate
+from pyrate_limiter import (
+    BucketFullException,
+    Duration,
+    Limiter,
+    LimiterDelayException,
+    Rate,
+)
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -39,6 +86,46 @@ logger = logging.getLogger(__name__)
 __all__ = ["DayforceClient", "DayforceApiError"]
 
 _RETRYABLE_STATUS = [*range(100, 200), 429, *range(500, 600)]
+
+#: Dayforce's documented ceiling (see module docstring); constructor args are
+#: clamped to these so a misconfigured setting can't exceed the real limit.
+_DAYFORCE_MAX_RPS_CEILING = 10
+_DAYFORCE_MAX_RPM_CEILING = 100
+
+#: How long the limiter may sleep queuing a single request before giving up
+#: and raising loudly. A rolling per-minute bucket never needs more than
+#: ~60s for a slot to free up, so this is a generous multiple of that, not a
+#: cap on how long a whole multi-employee batch may run (that's just many
+#: sequential waits, per Dayforce's own ~60-minutes-for-6000-employees example).
+_RATE_LIMIT_MAX_QUEUE_DELAY_MS = 120_000
+
+#: Phrases that show up if Dayforce denies a request "with a message" instead
+#: of (or alongside) a conventional error status - see module docstring.
+_RATE_LIMIT_DENIAL_MARKERS = (
+    "rate limit",
+    "too many requests",
+    "threshold",
+    "limit has been reached",
+    "limit reached",
+)
+
+
+def _rate_limit_denial_text(payload: Any) -> str | None:
+    """Return the offending message if ``payload`` looks like a rate-limit
+    denial dressed up as a normal response, else ``None``."""
+    if not isinstance(payload, dict):
+        return None
+    values: list[str] = []
+    for key in ("Message", "Messages", "Error", "error", "errorMessage"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(v for v in value if isinstance(v, str))
+    for text in values:
+        if any(marker in text.lower() for marker in _RATE_LIMIT_DENIAL_MARKERS):
+            return text
+    return None
 
 
 class DayforceApiError(RuntimeError):
@@ -100,11 +187,11 @@ class DayforceClient:
         api_version: str | None = None,
         test_mode: bool = False,
         timeout: float = 30.0,
+        max_rps: int = 8,
         max_rpm: int = 90,
         throttle_seconds: float = 0.2,
         lookback_days: int = 30,
         horizon_days: int = 90,
-        window_days: int = 30,
         session: requests.Session | None = None,
     ) -> None:
         self.username = username
@@ -114,7 +201,8 @@ class DayforceClient:
         self.throttle_seconds = throttle_seconds
         self.lookback_days = lookback_days
         self.horizon_days = horizon_days
-        self.window_days = min(window_days, 31)
+        self.max_rps = min(max(1, max_rps), _DAYFORCE_MAX_RPS_CEILING)
+        self.max_rpm = min(max(1, max_rpm), _DAYFORCE_MAX_RPM_CEILING)
 
         base = base_uri or (self.TEST_BASE_URI if test_mode else self.BASE_URI)
         version = (api_version or self.API_VERSION).strip("/")
@@ -123,8 +211,16 @@ class DayforceClient:
 
         # Token bucket shared by every call this client makes. Databricks runs
         # one job at a time, so a per-process limiter is enough to stay under
-        # Dayforce's tenant ceiling.
-        self._limiter = Limiter(Rate(max(1, max_rpm), Duration.MINUTE))
+        # Dayforce's tenant ceiling. Dual-tier (per-second AND per-minute) to
+        # match Dayforce's documented "10/sec, 100/min" shape rather than
+        # approximating it with a per-minute-only average that could still
+        # burst past the per-second cap. max_delay makes it queue (sleep)
+        # instead of failing when a tier is momentarily full - see module
+        # docstring for why 120s is a safe, generous bound.
+        self._limiter = Limiter(
+            [Rate(self.max_rps, Duration.SECOND), Rate(self.max_rpm, Duration.MINUTE)],
+            max_delay=_RATE_LIMIT_MAX_QUEUE_DELAY_MS,
+        )
 
         self._http = session or self._build_session()
         self._http.auth = (username, password)
@@ -140,11 +236,11 @@ class DayforceClient:
             base_uri=settings.dayforce_base_uri,
             api_version=settings.dayforce_api_version,
             test_mode=settings.dayforce_test_mode,
+            max_rps=settings.dayforce_max_rps,
             max_rpm=settings.dayforce_max_rpm,
             throttle_seconds=settings.dayforce_throttle_seconds,
             lookback_days=settings.tafw_lookback_days,
             horizon_days=settings.tafw_horizon_days,
-            window_days=settings.tafw_window_days,
             session=session,
         )
 
@@ -175,30 +271,78 @@ class DayforceClient:
             return endpoint
         return self.api_base + endpoint.lstrip("/")
 
-    def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
-        """Rate-limited GET -> parsed JSON, or raise :class:`DayforceApiError`."""
-        self._limiter.try_acquire("dayforce")
-        if self.throttle_seconds > 0:
-            time.sleep(self.throttle_seconds)
-        try:
-            response = self._http.get(
-                self._url(endpoint), params=params or None, timeout=self.timeout
-            )
-        except requests.RequestException as err:  # transport failure after retries
-            raise DayforceApiError(f"GET {endpoint} failed: {err}") from err
+    #: Bound on retries when Dayforce denies a request "with a message"
+    #: instead of a conventional 429 (see module docstring / _rate_limit_denial_text).
+    MAX_RATE_LIMIT_RETRIES = 5
 
-        if not response.ok:
-            body: Any
-            try:
-                body = response.json()
-            except ValueError:
-                body = response.text
+    def _acquire_rate_limit_slot(self) -> None:
+        """Block (if needed) until the shared limiter has room for one more
+        request. Only raises if the wait would exceed
+        ``_RATE_LIMIT_MAX_QUEUE_DELAY_MS`` - i.e. something is wrong, not just
+        "the bucket is momentarily full"."""
+        try:
+            self._limiter.try_acquire("dayforce")
+        except (BucketFullException, LimiterDelayException) as err:
             raise DayforceApiError(
-                f"GET {endpoint} -> HTTP {response.status_code}",
-                status=response.status_code,
-                body=body,
-            )
-        return response.json()
+                f"Dayforce client-side rate limit could not be satisfied: {err}"
+            ) from err
+
+    def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        """Rate-limited GET -> parsed JSON, or raise :class:`DayforceApiError`.
+
+        Backs off and retries if Dayforce's response looks like a rate-limit
+        denial, even when it arrives as an ok-looking response rather than a
+        429 (Dayforce's guide doesn't promise either shape - see module
+        docstring).
+        """
+        last_denial = ""
+        for attempt in range(1, self.MAX_RATE_LIMIT_RETRIES + 1):
+            self._acquire_rate_limit_slot()
+            if self.throttle_seconds > 0:
+                time.sleep(self.throttle_seconds)
+            try:
+                response = self._http.get(
+                    self._url(endpoint), params=params or None, timeout=self.timeout
+                )
+            except requests.RequestException as err:  # transport failure after retries
+                raise DayforceApiError(f"GET {endpoint} failed: {err}") from err
+
+            if not response.ok:
+                body: Any
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = response.text
+                raise DayforceApiError(
+                    f"GET {endpoint} -> HTTP {response.status_code}",
+                    status=response.status_code,
+                    body=body,
+                )
+
+            payload = response.json()
+            last_denial = _rate_limit_denial_text(payload) or ""
+            if not last_denial:
+                return payload
+
+            if attempt < self.MAX_RATE_LIMIT_RETRIES:
+                backoff = min(2**attempt, 30)
+                logger.warning(
+                    "Dayforce reported rate limiting on GET %s (attempt %d/%d): "
+                    "%r - backing off %ds",
+                    endpoint,
+                    attempt,
+                    self.MAX_RATE_LIMIT_RETRIES,
+                    last_denial,
+                    backoff,
+                )
+                time.sleep(backoff)
+
+        raise DayforceApiError(
+            f"GET {endpoint} denied as rate-limited {self.MAX_RATE_LIMIT_RETRIES} "
+            f"times in a row: {last_denial!r}",
+            status=response.status_code,
+            body=payload,
+        )
 
     # ------------------------------------------------------------------ #
     # Roster                                                            #
@@ -237,8 +381,10 @@ class DayforceClient:
             first = False
             url = self._next_page_url(payload)
             if url is not None:
-                logger.debug("Employees: following page %d", page_num + 1)
-        logger.warning("Employees pagination hit MAX_PAGES=%d; stopping", self.MAX_PAGES)
+                logger.debug("%s: following page %d", endpoint, page_num + 1)
+        logger.warning(
+            "%s pagination hit MAX_PAGES=%d; stopping", endpoint, self.MAX_PAGES
+        )
 
     def iter_employees(
         self, *, page_size: int | None = None, **query_params: Any
@@ -290,19 +436,24 @@ class DayforceClient:
         data = payload.get("Data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else (payload or {})
 
+    def get_employee_work_assignments(self, xref_code: str) -> dict[str, Any]:
+        """One employee's detail record, expanded with ``WorkAssignments``.
+
+        Carries ``WorkAssignments.Items[].Position.Department`` (XRefCode /
+        ShortName / LongName) - see :func:`tafw_ingest.employees.get_employee_department`.
+        """
+        return self.get_employee(xref_code, expand="WorkAssignments")
+
     # ------------------------------------------------------------------ #
     # TAFW                                                              #
     # ------------------------------------------------------------------ #
-    def _windows(self, now: datetime | None = None) -> list[tuple[datetime, datetime]]:
+    def _lookback_horizon_span(
+        self, now: datetime | None = None
+    ) -> tuple[datetime, datetime]:
         now = now or datetime.now(UTC)
-        cursor = _start_of_day(now - timedelta(days=self.lookback_days))
-        far_end = _end_of_day(now + timedelta(days=self.horizon_days))
-        windows: list[tuple[datetime, datetime]] = []
-        while cursor <= far_end:
-            end = min(_end_of_day(cursor + timedelta(days=self.window_days - 1)), far_end)
-            windows.append((cursor, end))
-            cursor = _start_of_day(end + timedelta(days=1))
-        return windows
+        start = _start_of_day(now - timedelta(days=self.lookback_days))
+        end = _end_of_day(now + timedelta(days=self.horizon_days))
+        return start, end
 
     def get_tafw_records_for_employee(
         self,
@@ -311,24 +462,29 @@ class DayforceClient:
         start_date: datetime,
         end_date: datetime,
     ) -> list[dict[str, Any]]:
-        """One employee, one status, one <=31-day window -> list of raw entries."""
+        """One employee, one status, one date range -> list of raw entries.
+
+        Follows ``Paging.Next`` to collect every page, not just the first.
+        """
         params = {
             "filterTAFWStartDate": _iso8601(start_date),
             "filterTAFWEndDate": _iso8601(end_date),
             "status": status_type,
         }
-        payload = self._get(f"Employees/{xref_code}/TimeAwayFromWork", params=params)
-        data = payload.get("Data") if isinstance(payload, dict) else None
-        return list(data) if isinstance(data, list) else []
+        records: list[dict[str, Any]] = []
+        for payload in self._iter_pages(
+            f"Employees/{xref_code}/TimeAwayFromWork", params
+        ):
+            data = payload.get("Data") if isinstance(payload, dict) else None
+            records.extend(row for row in data or [] if isinstance(row, dict))
+        return records
 
     def iter_tafw_records(
         self, xref_code: str, status_type: str, *, now: datetime | None = None
     ) -> Iterator[dict[str, Any]]:
         """Yield every raw TAFW entry for one employee/status across the full span."""
-        for start, end in self._windows(now):
-            yield from self.get_tafw_records_for_employee(
-                xref_code, status_type, start, end
-            )
+        start, end = self._lookback_horizon_span(now)
+        yield from self.get_tafw_records_for_employee(xref_code, status_type, start, end)
 
     def get_tafw_records_for_employee_in_timeframe(
         self, xref_code: str, status_type: str, *, now: datetime | None = None

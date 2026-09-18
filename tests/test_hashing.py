@@ -9,6 +9,7 @@ import hashlib
 import pytest
 
 from tafw_ingest.hashing import canonical_string, normalize_hours, record_hash
+from tafw_ingest.normalize import normalize_entry
 
 # Golden values - computed once, must never move without a HASH_SPEC_VERSION bump.
 GOLDEN = {
@@ -60,3 +61,103 @@ def test_hours_rules():
         normalize_hours(-1)
     with pytest.raises(ValueError):
         normalize_hours("not-a-number")
+
+
+def test_unique_hash_per_day_for_multi_day_request_with_daylist():
+    """A single multi-day TAFW request (explicit DayList) yields one distinct
+    record_hash per day, each independently recomputable from its own fields."""
+    entry = {
+        "TimeStart": "2026-03-16T00:00:00",
+        "TimeEnd": "2026-03-18T00:00:00",
+        "NetHours": 24.0,
+        "ReasonName": "Vacation",
+        "PayAdjustmentCodeName": "VAC",
+        "DayList": [
+            {"Date": "2026-03-16", "NetHours": 8.0},
+            {"Date": "2026-03-17", "NetHours": 8.0},
+            {"Date": "2026-03-18", "NetHours": 8.0},
+        ],
+    }
+    records = normalize_entry("H5JN767", entry)
+
+    assert [r.pto_date.isoformat() for r in records] == [
+        "2026-03-16",
+        "2026-03-17",
+        "2026-03-18",
+    ]
+    hashes = [r.record_hash for r in records]
+    assert len(hashes) == len(set(hashes))  # every day in the request is unique
+    for r in records:
+        assert r.record_hash == record_hash(
+            r.employee_xref, r.pto_date, r.type_code, r.hours
+        )
+
+
+def test_unique_hash_per_day_for_multi_day_request_expanded():
+    """Same, but via the expand_multi_day=True even-split fallback (no DayList)."""
+    entry = {
+        "TimeStart": "2026-03-16T00:00:00",
+        "TimeEnd": "2026-03-18T00:00:00",
+        "NetHours": 24.0,
+        "ReasonName": "Vacation",
+        "PayAdjustmentCodeName": "VAC",
+    }
+    records = normalize_entry("H5JN767", entry, expand_multi_day=True)
+
+    assert len(records) == 3
+    hashes = [r.record_hash for r in records]
+    assert len(hashes) == len(set(hashes))
+
+
+def test_hash_is_deterministic_across_repeated_ingests():
+    """Re-normalizing the same request (e.g. seen again in the next sync
+    cycle's overlapping window) must reproduce identical hashes, or the
+    staging MERGE would treat unchanged days as new/changed records."""
+    entry = {
+        "TimeStart": "2026-03-16T00:00:00",
+        "TimeEnd": "2026-03-18T00:00:00",
+        "NetHours": 24.0,
+        "ReasonName": "Vacation",
+        "PayAdjustmentCodeName": "VAC",
+        "DayList": [
+            {"Date": "2026-03-16", "NetHours": 8.0},
+            {"Date": "2026-03-17", "NetHours": 8.0},
+            {"Date": "2026-03-18", "NetHours": 8.0},
+        ],
+    }
+    first = [r.record_hash for r in normalize_entry("H5JN767", entry)]
+    second = [r.record_hash for r in normalize_entry("H5JN767", entry)]
+    assert first == second
+
+
+def test_different_requests_for_same_employee_dont_collide():
+    """Two distinct TAFW requests (different reason, non-overlapping dates)
+    for the same employee must never share a hash for any of their days."""
+    vacation = normalize_entry(
+        "H5JN767",
+        {
+            "TimeStart": "2026-03-16T00:00:00",
+            "TimeEnd": "2026-03-17T00:00:00",
+            "NetHours": 16.0,
+            "ReasonName": "Vacation",
+            "PayAdjustmentCodeName": "VAC",
+            "DayList": [
+                {"Date": "2026-03-16", "NetHours": 8.0},
+                {"Date": "2026-03-17", "NetHours": 8.0},
+            ],
+        },
+    )
+    sick = normalize_entry(
+        "H5JN767",
+        {
+            "TimeStart": "2026-04-01T00:00:00",
+            "TimeEnd": "2026-04-01T00:00:00",
+            "NetHours": 8.0,
+            "ReasonName": "Sick",
+            "PayAdjustmentCodeName": "SICK",
+            "DayList": [{"Date": "2026-04-01", "NetHours": 8.0}],
+        },
+    )
+    vacation_hashes = {r.record_hash for r in vacation}
+    sick_hashes = {r.record_hash for r in sick}
+    assert vacation_hashes.isdisjoint(sick_hashes)
