@@ -185,10 +185,26 @@ class Settings(BaseSettings):
             except Exception:  # noqa: BLE001 - secret absent
                 return default
 
+        dayforce_username = secret("username")
+        dayforce_password = secret("password")
+        if not dayforce_username or not dayforce_password:
+            # A blank username/password still reaches Dayforce as valid Basic
+            # Auth syntax - it just gets rejected with an HTTP 401 several
+            # frames deep in the HTTP client, which is a very roundabout way
+            # to find out a secret scope/key was missing. Fail here instead,
+            # at the point where we know exactly which secret was absent.
+            raise RuntimeError(
+                f"Dayforce credentials missing: secret scope {secret_scope!r} has no "
+                "'username' and/or 'password' key (or this cluster can't read it). "
+                f"Set them with `databricks secrets put-secret {secret_scope} username` "
+                f"and `... {secret_scope} password`, or check the scope name matches "
+                "what's passed to Settings.from_databricks(secret_scope=...)."
+            )
+
         values: dict[str, Any] = {
             "writer": "databricks",
-            "dayforce_username": secret("username"),
-            "dayforce_password": secret("password"),
+            "dayforce_username": dayforce_username,
+            "dayforce_password": dayforce_password,
             "dayforce_company": secret("company", "bluedrop"),
             "dayforce_base_uri": secret(
                 "base_uri", cls.model_fields["dayforce_base_uri"].default
