@@ -18,6 +18,17 @@ if IN_DATABRICKS:
     DATABRICKS_REPO_ROOT = Path("/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW")
     sys.path.insert(0, str(DATABRICKS_REPO_ROOT / "src"))
 
+    # Unlike local (where `pip install -e .` already populated .venv),
+    # Databricks compute doesn't come with this repo's dependencies
+    # pre-installed - install them here, before anything below imports
+    # tafw_ingest or the third-party packages (e.g. pydantic-settings) it
+    # depends on.
+    import subprocess
+
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-q", "-r", str(DATABRICKS_REPO_ROOT / "requirements.txt")]
+    )
+
 #Import custom python libraries
 from tafw_ingest import employees
 from tafw_ingest.config import Settings
