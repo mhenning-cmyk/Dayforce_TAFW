@@ -19,8 +19,16 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+try:
+    ROOT = Path(__file__).resolve().parent.parent
+except NameError:
+    # Databricks serverless compute does not set __file__.
+    ROOT = Path("/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW")
+sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -35,7 +43,6 @@ from tafw_ingest.roster import (
     iter_in_scope_employees,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "conf" / "settings.dev.yaml"
 
 # Step 4 probes per-employee detail (1 GET each); cap it so the smoke test stays quick.

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Dayforce smoke test
 # MAGIC Runs `tests/test.py` from this Repos checkout, pulling Dayforce
@@ -6,16 +10,20 @@
 # MAGIC OS keyring that `Settings.from_env()` uses for local dev.
 
 # COMMAND ----------
+
 REPO_ROOT = "/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW"
 
 # COMMAND ----------
+
 # MAGIC %pip install -r {REPO_ROOT}/requirements.txt
-# MAGIC %pip install -e {REPO_ROOT}
+# MAGIC %pip install -e {REPO_ROOT} --ignore-requires-python
 
 # COMMAND ----------
+
 dbutils.library.restartPython()
 
 # COMMAND ----------
+
 import os
 import subprocess
 import sys
