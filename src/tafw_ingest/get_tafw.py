@@ -11,10 +11,15 @@ default).
 
 ``get_tafw_records_for_employee`` issues one request per (employee, status)
 pair for the whole date range and follows ``Paging.Next`` for large result
-sets - no date-window chunking here. An earlier version of this module
-assumed the TAFW endpoint capped queries at 31 days (inherited, uncited,
-from the original ``bluedrop-mavenlink-sync`` client), but live testing
-against a full year showed that limit doesn't hold.
+sets. An earlier version of this module assumed the TAFW endpoint capped
+queries at 31 days (inherited, uncited, from the original
+``bluedrop-mavenlink-sync`` client), but live testing against a full year
+showed that limit doesn't hold - so chunking is optional here (``chunk_days``
+on :func:`fetch_tafw_records` / :func:`get_tafw_days`), for callers who want
+results broken into fixed-size periods rather than because the API needs it.
+Chunk boundaries overlap by one instant, so a request spanning one is fetched
+twice; :func:`expand_tafw_records_to_days` dedupes by ``RecordHash`` before
+it reaches the final DataFrame, so that's harmless.
 
 Each TAFW request is expanded into one row per weekday off, 8 hours each -
 ``TimeEnd`` is treated as the start of the first day back (exclusive),
@@ -55,6 +60,20 @@ __all__ = [
 DEFAULT_STATUSES = (DayforceClient.STATUS_APPROVED, DayforceClient.STATUS_CANCELED)
 
 
+def _chunk_window(
+    start: _dt.datetime, end: _dt.datetime, chunk_days: int
+) -> list[tuple[_dt.datetime, _dt.datetime]]:
+    """Split ``[start, end]`` into consecutive ``chunk_days``-wide windows."""
+    step = _dt.timedelta(days=chunk_days)
+    windows = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + step, end)
+        windows.append((cursor, chunk_end))
+        cursor = chunk_end
+    return windows
+
+
 def fetch_tafw_records(
     client: DayforceClient,
     xref_codes: Sequence[str],
@@ -62,29 +81,40 @@ def fetch_tafw_records(
     end_date: _dt.datetime,
     *,
     statuses: Sequence[str] = DEFAULT_STATUSES,
+    chunk_days: int | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch raw TAFW entries for every (employee, status) combination.
 
     Each returned dict is tagged with ``_XRefCode`` / ``_Status`` so
     :func:`expand_tafw_records_to_days` doesn't need those threaded through
     separately.
+
+    ``chunk_days``, if given, splits ``[start_date, end_date]`` into that
+    many days per request instead of one request spanning the whole range -
+    see the module docstring for why that's a caller preference, not an API
+    requirement.
     """
+    windows = _chunk_window(start_date, end_date, chunk_days) if chunk_days else [
+        (start_date, end_date)
+    ]
     records: list[dict[str, Any]] = []
     for xref in xref_codes:
         for status in statuses:
-            entries = client.get_tafw_records_for_employee(
-                xref, status, start_date, end_date
-            )
-            for entry in entries:
-                tagged = dict(entry)
-                tagged["_XRefCode"] = xref
-                tagged["_Status"] = status
-                records.append(tagged)
+            for window_start, window_end in windows:
+                entries = client.get_tafw_records_for_employee(
+                    xref, status, window_start, window_end
+                )
+                for entry in entries:
+                    tagged = dict(entry)
+                    tagged["_XRefCode"] = xref
+                    tagged["_Status"] = status
+                    records.append(tagged)
     logger.info(
-        "Fetched %d TAFW record(s) for %d employee(s), statuses=%s",
+        "Fetched %d TAFW record(s) for %d employee(s), statuses=%s%s",
         len(records),
         len(xref_codes),
         list(statuses),
+        f", {len(windows)}x{chunk_days}d chunks" if chunk_days else "",
     )
     return records
 
@@ -128,9 +158,10 @@ def get_tafw_days(
     end_date: _dt.datetime,
     *,
     statuses: Sequence[str] = DEFAULT_STATUSES,
+    chunk_days: int | None = None,
 ) -> pd.DataFrame:
     """Fetch + expand in one call: employees x statuses x date-range -> DataFrame."""
     records = fetch_tafw_records(
-        client, xref_codes, start_date, end_date, statuses=statuses
+        client, xref_codes, start_date, end_date, statuses=statuses, chunk_days=chunk_days
     )
     return expand_tafw_records_to_days(records)

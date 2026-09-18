@@ -2,6 +2,7 @@
 
 #Import python libaries
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import pandas as pd
 
@@ -35,6 +36,8 @@ from tafw_ingest.config import Settings
 from tafw_ingest.dayforce_client import DayforceClient
 from tafw_ingest.department_map import DepartmentMap
 from tafw_ingest.employee_department_queries import MERGE_EMPLOYEE_DEPARTMENT_SQL
+from tafw_ingest.get_tafw import DEFAULT_STATUSES, expand_tafw_records_to_days, fetch_tafw_records
+from tafw_ingest.tafw_day_record_queries import MERGE_TAFW_DAY_RECORD_SQL
 
 if IN_DATABRICKS:
     # Databricks: non-secret defaults (base_uri, company, ...) come from the
@@ -145,3 +148,81 @@ else:
         f"would merge {len(employee_department_rows)} row(s) into {EMPLOYEE_DEPARTMENT_TABLE}:"
     )
     print(employee_department_df)
+
+############################# TAFW #############################
+# Step 4. Get TAFW (Time Away From Work) requests for these employees.
+# Only employees with a resolved ProjectId (employee_department_df, already
+# filtered in Step 2) are in scope - a TAFW record for an employee with no
+# project/task mapping can't be attributed anywhere downstream.
+tafw_xrefs = employee_department_df["XRefCode"].tolist()
+
+#### Testing select a subset
+tafw_xrefs = tafw_xrefs[0:3]
+
+# Rolling window: one month back to three months ahead of today, split into
+# 30-day chunks (a caller preference, not an API requirement - see
+# tafw_ingest.get_tafw's module docstring).
+tafw_now = datetime.now(UTC)
+TAFW_START_DATE = tafw_now - timedelta(days=30)
+TAFW_END_DATE = tafw_now + timedelta(days=90)
+TAFW_CHUNK_DAYS = 30
+
+print(
+    f"Getting {list(DEFAULT_STATUSES)} TAFW records for {len(tafw_xrefs)} employee(s), "
+    f"{TAFW_START_DATE.date()} .. {TAFW_END_DATE.date()}"
+)
+tafw_records = fetch_tafw_records(
+    client,
+    tafw_xrefs,
+    TAFW_START_DATE,
+    TAFW_END_DATE,
+    statuses=DEFAULT_STATUSES,
+    chunk_days=TAFW_CHUNK_DAYS,
+)
+
+# One row per weekday off, APPROVED + CANCELED combined, deduped by RecordHash.
+tafw_day_df = expand_tafw_records_to_days(tafw_records)
+print(f"Expanded to {len(tafw_day_df)} weekday-off row(s).")
+print(tafw_day_df)
+
+#Step 5. Upsert to tafw_day_records table in databricks
+TAFW_DAY_RECORD_TABLE = "tafw.tafw_records.tafw_day_records"
+
+if IN_DATABRICKS:
+    # `spark` is injected by Databricks, same as `dbutils` above - never
+    # defined locally, so these are expected "undefined name" warnings.
+    # Built from the raw dicts (plain str/float/date), not the pandas
+    # DataFrame directly - explicit schema avoids relying on inference, same
+    # reasoning as the employee upsert in Step 3.
+    from pyspark.sql.types import DateType, DecimalType, StringType, StructField, StructType
+
+    tafw_schema = StructType(
+        [
+            StructField("XRefCode", StringType(), False),
+            StructField("Date", DateType(), False),
+            StructField("Hours", DecimalType(6, 2), False),
+            StructField("ReasonName", StringType(), True),
+            StructField("PayAdjShortName", StringType(), True),
+            StructField("Status", StringType(), False),
+            StructField("RecordHash", StringType(), False),
+        ]
+    )
+    tafw_source = spark.createDataFrame(  # noqa: F821
+        tafw_day_df.to_dict("records"), schema=tafw_schema
+    )
+    tafw_source.createOrReplaceTempView("_tafw_day_record_updates")
+
+    tafw_merge_sql = MERGE_TAFW_DAY_RECORD_SQL.format(
+        table=TAFW_DAY_RECORD_TABLE, source="_tafw_day_record_updates"
+    )
+    spark.sql(tafw_merge_sql)  # noqa: F821
+    spark.catalog.dropTempView("_tafw_day_record_updates")  # noqa: F821
+    print(f"Merged {len(tafw_day_df)} row(s) into {TAFW_DAY_RECORD_TABLE}")
+else:
+    # No Databricks/Spark session available locally - skip the upload but show
+    # what would have been merged so the rest of the script stays runnable.
+    print(
+        f"Skipping Databricks upload (not running in Databricks) - "
+        f"would merge {len(tafw_day_df)} row(s) into {TAFW_DAY_RECORD_TABLE}:"
+    )
+    print(tafw_day_df)
