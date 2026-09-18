@@ -37,10 +37,14 @@ from tafw_ingest.department_map import DepartmentMap
 from tafw_ingest.employee_department_queries import MERGE_EMPLOYEE_DEPARTMENT_SQL
 
 if IN_DATABRICKS:
-    # Databricks: no local repo file to rely on - secrets come from the
-    # `dayforce` secret scope, everything else from job widgets (falls back
-    # to Settings' own defaults for any widget that isn't declared).
-    settings = Settings.from_databricks(dbutils, secret_scope="dayforce")  # noqa: F821
+    # Databricks: non-secret defaults (base_uri, company, ...) come from the
+    # synced repo's conf/settings.dev.yaml, same file `from_env` reads
+    # locally. Credentials come from the `dayforce` secret scope; everything
+    # else from job widgets (falls back to Settings' own defaults for any
+    # widget that isn't declared).
+    settings = Settings.from_databricks(  # noqa: F821
+        dbutils, secret_scope="dayforce", config_path=DATABRICKS_REPO_ROOT / "conf" / "settings.dev.yaml"
+    )
 else:
     # Local (script, REPL, or an interactive cell with no `__file__`): find
     # the repo root by walking up from the current file/directory until

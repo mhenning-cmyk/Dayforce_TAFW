@@ -161,6 +161,7 @@ class Settings(BaseSettings):
         *,
         secret_scope: str = "dayforce",
         widget_prefix: str = "",
+        config_path: str | os.PathLike[str] | None = None,
         **overrides: Any,
     ) -> Settings:
         """Build from notebook widgets + a Databricks secret scope.
@@ -171,7 +172,23 @@ class Settings(BaseSettings):
 
         Expected secrets in ``secret_scope``: ``username``, ``password``,
         optionally ``company``, ``base_uri``.
+
+        ``config_path`` points at the same non-secret YAML ``from_env`` reads
+        (e.g. ``conf/settings.dev.yaml``, synced into the Workspace along
+        with the rest of the repo) and supplies ``dayforce_base_uri`` /
+        ``dayforce_company`` when the secret scope doesn't carry them - which
+        it usually won't, since those aren't secrets. Without it, an unset
+        ``base_uri`` secret silently falls back to this model's generic
+        placeholder host instead of the real tenant, which Dayforce rejects
+        with an HTTP 401 that looks exactly like a bad credential.
         """
+
+        yaml_defaults: dict[str, Any] = {}
+        if config_path:
+            path = Path(config_path)
+            if path.is_file():
+                loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                yaml_defaults = {k.lower(): v for k, v in loaded.items()}
 
         def widget(name: str, default: str = "") -> str:
             try:
@@ -205,9 +222,14 @@ class Settings(BaseSettings):
             "writer": "databricks",
             "dayforce_username": dayforce_username,
             "dayforce_password": dayforce_password,
-            "dayforce_company": secret("company", "bluedrop"),
+            "dayforce_company": secret(
+                "company", yaml_defaults.get("dayforce_company", "bluedrop")
+            ),
             "dayforce_base_uri": secret(
-                "base_uri", cls.model_fields["dayforce_base_uri"].default
+                "base_uri",
+                yaml_defaults.get(
+                    "dayforce_base_uri", cls.model_fields["dayforce_base_uri"].default
+                ),
             ),
             "dayforce_test_mode": widget("test_mode", "false").lower() == "true",
         }
