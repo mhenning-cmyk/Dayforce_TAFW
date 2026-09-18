@@ -1,8 +1,22 @@
 ## Dayforce Integration Service ##
 
 #Import python libaries
+import sys
 from pathlib import Path
 import pandas as pd
+
+# Databricks notebooks get `dbutils` injected as a global automatically; it
+# never exists locally (script, REPL, or an interactive/Jupyter cell), so its
+# presence is how we tell the two environments apart. This has to run before
+# the `tafw_ingest` imports below: locally the package is on sys.path via
+# `pip install -e .`, but a Databricks Workspace notebook doesn't get that for
+# free, so `import tafw_ingest` 404s unless its `src/` dir is added first.
+IN_DATABRICKS = "dbutils" in globals()
+
+if IN_DATABRICKS:
+    # Fixed Workspace path this repo is synced to - update if it ever moves.
+    DATABRICKS_REPO_ROOT = Path("/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW")
+    sys.path.insert(0, str(DATABRICKS_REPO_ROOT / "src"))
 
 #Import custom python libraries
 from tafw_ingest import employees
@@ -13,11 +27,6 @@ from tafw_ingest.employee_department_queries import (
     CREATE_EMPLOYEE_DEPARTMENT_TABLE_SQL,
     MERGE_EMPLOYEE_DEPARTMENT_SQL,
 )
-
-# Databricks notebooks get `dbutils` injected as a global automatically; it
-# never exists locally (script, REPL, or an interactive/Jupyter cell), so its
-# presence is how we tell the two environments apart.
-IN_DATABRICKS = "dbutils" in globals()
 
 if IN_DATABRICKS:
     # Databricks: no local repo file to rely on - secrets come from the
