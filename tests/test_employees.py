@@ -12,6 +12,7 @@ from tafw_ingest.employees import (
     get_department_project_id,
     get_department_task_id,
     get_employee_department,
+    get_employee_display_name,
 )
 
 BASE = "https://dayforcehcm.com/Api/bluedrop/v1/Employees"
@@ -205,9 +206,15 @@ def test_fetch_employee_department(client, requests_mock):
     df = fetch_employee_department(client, "H5JN995")
 
     assert requests_mock.last_request.qs["expand"] == ["workassignments"]
-    assert list(df.columns) == ["XRefCode", "DepartmentXRefCode"]
+    assert list(df.columns) == ["XRefCode", "DisplayName", "DepartmentXRefCode"]
     assert df.iloc[0]["XRefCode"] == "H5JN995"
+    assert df.iloc[0]["DisplayName"] == "Woodland, Jason"
     assert df.iloc[0]["DepartmentXRefCode"] == "BTSI_SIMULATION_PRODUCT"
+
+
+def test_get_employee_display_name():
+    assert get_employee_display_name({"DisplayName": "Woodland, Jason"}) == "Woodland, Jason"
+    assert get_employee_display_name({"XRefCode": "H5JN1"}) is None
 
 
 def test_get_department_project_id_resolves_via_department_map():
