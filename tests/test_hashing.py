@@ -8,18 +8,25 @@ import hashlib
 
 import pytest
 
-from tafw_ingest.hashing import canonical_string, normalize_hours, record_hash
+from tafw_ingest.hashing import (
+    RECORD_HASH_LENGTH,
+    canonical_string,
+    normalize_hours,
+    record_hash,
+)
 from tafw_ingest.normalize import normalize_entry
 
 # Golden values - computed once, must never move without a HASH_SPEC_VERSION bump.
+# The digest is the first RECORD_HASH_LENGTH (16) chars of the full SHA-256
+# hex digest (HASH_SPEC_VERSION 2 - see tafw_ingest.hashing's module docstring).
 GOLDEN = {
     ("ABC123", "2026-03-14", "VACATION", 8): (
         "ABC123|2026-03-14|VACATION|8.00",
-        "aaeadb0cbd49c96ac306861c948719e3c0079acde65afdbde61e129dc1798c24",
+        "aaeadb0cbd49c96a",
     ),
     ("EMP-001", "2026-07-01", "PERSONAL", "4.5"): (
         "EMP-001|2026-07-01|PERSONAL|4.50",
-        "edd791cbc8a8bf352a75e412eb41458347aa2654bfd4b899f249195d40da547b",
+        "edd791cbc8a8bf35",
     ),
 }
 
@@ -29,8 +36,9 @@ def test_golden_values(args, expected):
     canonical, digest = expected
     assert canonical_string(*args) == canonical
     assert record_hash(*args) == digest
-    # digest really is sha256 of that exact string
-    assert hashlib.sha256(canonical.encode()).hexdigest() == digest
+    assert len(digest) == RECORD_HASH_LENGTH
+    # digest really is a prefix of the full sha256 of that exact string
+    assert hashlib.sha256(canonical.encode()).hexdigest().startswith(digest)
 
 
 def test_normalization_is_format_insensitive():

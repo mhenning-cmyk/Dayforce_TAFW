@@ -21,6 +21,16 @@ THE SPEC BELOW IS FROZEN. Changing the field list, order, separator,
 normalization rules, or digest algorithm re-keys every row already in the
 staging table. If a change is ever unavoidable, bump
 :data:`HASH_SPEC_VERSION`, store it alongside the hash, and plan a migration.
+
+v2 (:data:`HASH_SPEC_VERSION` = 2): truncated the SHA-256 hex digest from 64
+to :data:`RECORD_HASH_LENGTH` (16) characters for a more concise column value.
+16 hex chars = 64 bits of the digest; by the birthday bound, P(any collision)
+is ~2.7e-8 at 1 million rows and ~2.7e-6 at 10 million - this table's
+realistic scale (a few hundred employees x TAFW days) is orders of magnitude
+below where that risk becomes worth worrying about. Because it's a straight
+prefix of the v1 digest, existing v1 rows can be migrated in place with
+``UPDATE {table} SET RecordHash = substring(RecordHash, 1, 16)`` rather than
+needing a full re-key.
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from typing import Any
 __all__ = [
     "HASH_SPEC_VERSION",
     "FIELD_SEPARATOR",
+    "RECORD_HASH_LENGTH",
     "normalize_employee_xref",
     "normalize_pto_date",
     "normalize_type_code",
@@ -41,11 +52,14 @@ __all__ = [
     "record_hash",
 ]
 
-HASH_SPEC_VERSION = 1
+HASH_SPEC_VERSION = 2
 
 #: Joins the four normalized fields. A pipe cannot occur in any of them after
 #: normalization (dates are ISO, hours are numeric, codes are single tokens).
 FIELD_SEPARATOR = "|"
+
+#: Hex characters kept from the SHA-256 digest - see the v2 note above.
+RECORD_HASH_LENGTH = 16
 
 
 # --------------------------------------------------------------------------- #
@@ -138,10 +152,10 @@ def canonical_string(
 
 
 def record_hash(employee_xref: Any, pto_date: Any, type_code: Any, hours: Any) -> str:
-    """SHA-256 hex digest identifying one TAFW day-record.
+    """Truncated SHA-256 hex digest identifying one TAFW day-record.
 
     >>> record_hash("abc123", "2026-03-14T00:00:00Z", "vacation", 8)
-    '...'  # stable 64-char hex string; see tests/test_hashing.py for goldens
+    '...'  # stable 16-char hex string; see tests/test_hashing.py for goldens
     """
     canonical = canonical_string(employee_xref, pto_date, type_code, hours)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:RECORD_HASH_LENGTH]

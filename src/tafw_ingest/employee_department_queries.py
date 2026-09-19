@@ -26,6 +26,7 @@ __all__ = [
 CREATE_EMPLOYEE_DEPARTMENT_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {table} (
     XRefCode           STRING NOT NULL,
+    employee_name      STRING,
     DepartmentXRefCode STRING,
     ProjectId          INT,
     TaskId             INT
@@ -40,6 +41,7 @@ MERGE INTO {table} AS t
 USING {source} AS s
 ON t.XRefCode = s.XRefCode
 WHEN MATCHED THEN UPDATE SET
+    t.employee_name = s.employee_name,
     t.DepartmentXRefCode = s.DepartmentXRefCode,
     t.ProjectId = s.ProjectId,
     t.TaskId = s.TaskId

@@ -14,11 +14,12 @@ output frame exactly:
     ReasonName       STRING, null  - Dayforce's TAFW reason
     PayAdjShortName  STRING, null  - Dayforce's pay-adjustment short name
     Status           STRING        - "Approved" or "Canceled" (title-cased)
-    RecordHash       STRING        - SHA-256 hex digest day-record identity
-                                     (tafw_ingest.hashing.record_hash); unique
-                                     per row after expand_tafw_records_to_days's
-                                     own drop_duplicates, and the MERGE match
-                                     key here.
+    RecordHash       STRING        - 16-char truncated SHA-256 hex digest
+                                     day-record identity (tafw_ingest.hashing
+                                     .record_hash); unique per row after
+                                     expand_tafw_records_to_days's own
+                                     drop_duplicates, and the MERGE match key
+                                     here.
 
 This is a distinct, simpler table from :data:`tafw_ingest.staging.STAGING_DDL`,
 which backs the separate reconcile/active-tracking pipeline
