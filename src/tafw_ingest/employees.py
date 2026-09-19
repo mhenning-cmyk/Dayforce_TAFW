@@ -31,6 +31,7 @@ __all__ = [
     "employees_to_dataframe",
     "fetch_employees_dataframe",
     "get_employee_department",
+    "get_employee_display_name",
     "fetch_employee_department",
     "get_department_project_id",
     "get_department_task_id",
@@ -123,19 +124,33 @@ def get_employee_department(employee: dict[str, Any]) -> str | None:
     return department.get("XRefCode") if isinstance(department, dict) else None
 
 
+def get_employee_display_name(employee: dict[str, Any]) -> str | None:
+    """Pull ``DisplayName`` (e.g. ``"Woodland, Jason"``) off an employee record.
+
+    Dayforce's field-restricted role for this integration returns
+    ``DisplayName`` on the per-employee ``expand=WorkAssignments`` payload
+    (see :func:`fetch_employee_department`) even though the bulk
+    ``GET /Employees`` roster doesn't reliably populate ``FirstName``/
+    ``LastName`` - so this is the source of truth for an employee's name,
+    not the roster DataFrame from :func:`employees_to_dataframe`.
+    """
+    return employee.get("DisplayName")
+
+
 def fetch_employee_department(client: DayforceClient, xref_code: str) -> pd.DataFrame:
-    """Look up one employee's work assignment and return their department.
+    """Look up one employee's work assignment and return their name/department.
 
     Calls ``GET /Employees/{xref}?expand=WorkAssignments`` and returns a
-    one-row DataFrame with ``XRefCode`` and ``DepartmentXRefCode`` (the
-    assignment's ``Department.XRefCode``, or ``None`` if the employee has no
-    work assignment on file).
+    one-row DataFrame with ``XRefCode``, ``DisplayName``, and
+    ``DepartmentXRefCode`` (the assignment's ``Department.XRefCode``, or
+    ``None`` if the employee has no work assignment on file).
     """
     employee = client.get_employee_work_assignments(xref_code)
     return pd.DataFrame(
         [
             {
                 "XRefCode": employee.get("XRefCode", xref_code),
+                "DisplayName": get_employee_display_name(employee),
                 "DepartmentXRefCode": get_employee_department(employee),
             }
         ]
