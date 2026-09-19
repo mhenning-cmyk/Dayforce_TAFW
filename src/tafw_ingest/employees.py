@@ -35,6 +35,7 @@ __all__ = [
     "fetch_employee_department",
     "get_department_project_id",
     "get_department_task_id",
+    "build_employee_department_rows",
 ]
 
 #: Columns pulled to the front when present; everything else follows, sorted.
@@ -185,3 +186,34 @@ def get_department_task_id(
     dept_map = dept_map or DepartmentMap.load()
     resolved = dept_map.resolve(department_xref)
     return resolved.task_id if resolved else None
+
+
+def build_employee_department_rows(
+    client: DayforceClient,
+    xref_codes: Iterable[str],
+    dept_map: DepartmentMap | None = None,
+) -> list[dict[str, Any]]:
+    """Per-employee name/department/project/task rows, ready to upload.
+
+    One dict per XRefCode: ``XRefCode``, ``employee_name``,
+    ``DepartmentXRefCode``, ``ProjectId``, ``TaskId``. De-duped defensively in
+    case ``xref_codes`` repeats one. Employees whose department doesn't
+    resolve to a ``ProjectId`` (out of scope) are dropped from the returned
+    list entirely - not just filtered from a display copy - since a TAFW
+    record for someone with no project/task mapping can't be attributed
+    anywhere downstream, and this is the one place that decides what actually
+    gets uploaded.
+    """
+    dept_map = dept_map or DepartmentMap.load()
+    rows: dict[str, dict[str, Any]] = {}
+    for xref_code in xref_codes:
+        department_df = fetch_employee_department(client, xref_code)
+        department_xref = department_df.iloc[0]["DepartmentXRefCode"]
+        rows[xref_code] = {
+            "XRefCode": xref_code,
+            "employee_name": department_df.iloc[0]["DisplayName"],
+            "DepartmentXRefCode": department_xref,
+            "ProjectId": get_department_project_id(department_xref, dept_map),
+            "TaskId": get_department_task_id(department_xref, dept_map),
+        }
+    return [row for row in rows.values() if row["ProjectId"] is not None]

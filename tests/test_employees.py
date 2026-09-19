@@ -6,6 +6,7 @@ import pytest
 from tafw_ingest.dayforce_client import DayforceClient
 from tafw_ingest.department_map import DepartmentMap, ProjectTask
 from tafw_ingest.employees import (
+    build_employee_department_rows,
     employees_to_dataframe,
     fetch_employee_department,
     fetch_employees_dataframe,
@@ -215,6 +216,72 @@ def test_fetch_employee_department(client, requests_mock):
 def test_get_employee_display_name():
     assert get_employee_display_name({"DisplayName": "Woodland, Jason"}) == "Woodland, Jason"
     assert get_employee_display_name({"XRefCode": "H5JN1"}) is None
+
+
+def _mock_employee(requests_mock, xref_code, *, display_name, department_xref):
+    requests_mock.get(
+        f"{BASE}/{xref_code}",
+        json={
+            "Data": {
+                "XRefCode": xref_code,
+                "DisplayName": display_name,
+                "WorkAssignments": {
+                    "Items": [_work_assignment({"XRefCode": department_xref})]
+                },
+            }
+        },
+    )
+
+
+def test_build_employee_department_rows_drops_out_of_scope_departments(
+    client, requests_mock
+):
+    """The whole point of this function: an employee whose department has no
+    ProjectId mapping must not appear in the returned rows at all - this is
+    what actually gets uploaded, so a row surviving here with ProjectId=None
+    is exactly the bug that let null-ProjectId rows reach Databricks."""
+    dept_map = DepartmentMap({"BTSI_SERVICES": ProjectTask(96732, 3431175)})
+    _mock_employee(
+        requests_mock, "H5JN001", display_name="In, Scope", department_xref="BTSI_SERVICES"
+    )
+    _mock_employee(
+        requests_mock,
+        "H5JN002",
+        display_name="Out, Scope",
+        department_xref="CORP_FINANCE",
+    )
+
+    rows = build_employee_department_rows(client, ["H5JN001", "H5JN002"], dept_map)
+
+    assert [row["XRefCode"] for row in rows] == ["H5JN001"]
+    assert rows[0]["employee_name"] == "In, Scope"
+    assert rows[0]["ProjectId"] == 96732
+    assert rows[0]["TaskId"] == 3431175
+    assert all(row["ProjectId"] is not None for row in rows)
+
+
+def test_build_employee_department_rows_dedupes_xref_codes(client, requests_mock):
+    dept_map = DepartmentMap({"BTSI_SERVICES": ProjectTask(96732, 3431175)})
+    _mock_employee(
+        requests_mock, "H5JN001", display_name="Dup, Employee", department_xref="BTSI_SERVICES"
+    )
+
+    rows = build_employee_department_rows(client, ["H5JN001", "H5JN001"], dept_map)
+
+    assert len(rows) == 1
+
+
+def test_build_employee_department_rows_empty_when_all_out_of_scope(
+    client, requests_mock
+):
+    dept_map = DepartmentMap({"BTSI_SERVICES": ProjectTask(96732, 3431175)})
+    _mock_employee(
+        requests_mock, "H5JN002", display_name="Out, Scope", department_xref="CORP_FINANCE"
+    )
+
+    rows = build_employee_department_rows(client, ["H5JN002"], dept_map)
+
+    assert rows == []
 
 
 def test_get_department_project_id_resolves_via_department_map():
