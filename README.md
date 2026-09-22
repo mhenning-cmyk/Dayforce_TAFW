@@ -8,6 +8,9 @@ delete PTO records in NetSuite.
 This README covers **how to build and test the service locally before Databricks
 environment access is available**, and how the workflow changes once it is.
 
+> Looking for a plain-language explanation of what this project does, with no
+> coding background required? See [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+
 ---
 
 ## 1. What this service does
@@ -154,9 +157,45 @@ spark-warehouse/
 metastore_db/
 ```
 
+### Notebook-friendly git config (run once per clone)
+
+`notebooks/dayforce_integration_service.ipynb` gets edited from two places -
+here, and live inside Databricks (running cells, and occasionally real code
+edits) - so plain git, which diffs `.ipynb` as raw JSON text, turns "someone
+just ran it" or "someone edited a different cell" into a merge conflict on
+the whole file almost every time. Two things fix that, and both need a
+one-time local registration (`.gitattributes` declares the mapping and is
+already committed, but the actual filter/driver *commands* they point at are
+deliberately not something a repo can auto-install for you - that's a git
+security boundary, not an oversight):
+
+```bash
+# 1. Notebook-aware diff/merge (compares cell-by-cell instead of raw JSON lines)
+pip install -r requirements-dev.txt   # includes nbdime
+python -m nbdime config-git --enable
+
+# 2. Strip Databricks' execution_count/outputs before every commit, so
+#    re-running a notebook with no real changes produces no diff at all
+git config filter.strip-notebook-output.clean "python scripts/strip_notebook_output.py"
+git config filter.strip-notebook-output.smudge cat
+git config filter.strip-notebook-output.required false
+```
+
+This doesn't replace pulling before you start editing in either place - it
+just means the conflicts that do happen are real (both sides changed the
+same cell) rather than noise, and nbdime resolves the non-overlapping ones
+automatically instead of handing you a raw JSON conflict to untangle by hand.
+
 ---
 
 ## 6. Notebook source format
+
+> **Note:** this section describes the original plan. In practice the actual
+> notebook (`notebooks/dayforce_integration_service.ipynb`) is authored as a
+> real `.ipynb` file, not a `.py` with magic comments, so it can be edited
+> and run directly in Databricks' notebook UI. See §5 above for how to keep
+> that from causing constant merge pain, and [HOW_IT_WORKS.md](HOW_IT_WORKS.md)
+> for what it actually does.
 
 Author the notebook as a `.py` file so it version-controls cleanly. Databricks
 recognises these magic comments:
