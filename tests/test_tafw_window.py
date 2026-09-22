@@ -57,7 +57,7 @@ CONFIG = ROOT / "conf" / "settings.dev.yaml"
 
 # Hardcoded to match the known-good Postman call the scripts this replaces
 # were built from; add more xrefs to pull several employees in one run.
-XREF_CODES = ["H5JN767"]
+XREF_CODES = ["H5JN095"]
 STATUSES = DEFAULT_STATUSES  # (APPROVED, CANCELED)
 
 WINDOW_LOOKBACK_DAYS = 30  # ~1 month back from today
@@ -153,6 +153,8 @@ def main() -> int:
         print(json.dumps(record, indent=2, default=str))
 
     day_df = expand_tafw_records_to_days(all_records)
+    if not day_df.empty:
+        day_df = day_df.sort_values(["XRefCode", "Date"]).reset_index(drop=True)
     print(
         f"\n[2] Expanded to {len(day_df)} weekday-off row(s) "
         "(APPROVED + CANCELED combined, deduped by RecordHash)."

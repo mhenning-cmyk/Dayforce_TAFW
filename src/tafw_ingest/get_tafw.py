@@ -21,11 +21,14 @@ Chunk boundaries overlap by one instant, so a request spanning one is fetched
 twice; :func:`expand_tafw_records_to_days` dedupes by ``RecordHash`` before
 it reaches the final DataFrame, so that's harmless.
 
-Each TAFW request is expanded into one row per weekday off, 8 hours each -
-``TimeEnd`` is treated as the start of the first day back (exclusive),
-matching the Dayforce convention seen in practice: a Mon-Wed request off
-returns TimeStart=Mon 00:00, TimeEnd=Thu 00:00, NetHours=24 (3 weekdays x
-8h). Weekend days in the span are skipped since they carry no PTO hours.
+Each TAFW request is expanded into one row per weekday off - ``TimeEnd`` is
+treated as the start of the first day back (exclusive), matching the
+Dayforce convention seen in practice: a Mon-Wed request off returns
+TimeStart=Mon 00:00, TimeEnd=Thu 00:00, NetHours=24 (3 weekdays x 8h).
+Weekend days in the span are skipped since they carry no PTO hours. Hours
+per day is ``NetHours / weekday_count`` - not a hardcoded 8 - since the API
+gives one NetHours total for the whole span with no per-day breakdown, and a
+single partial day (e.g. a half-day return to work) can carry any value.
 
 Each expanded day row also carries a ``RecordHash`` - the same deterministic
 per-day identity hash used by the production pipeline
@@ -121,7 +124,11 @@ def fetch_tafw_records(
 
 def expand_tafw_records_to_days(records: list[dict[str, Any]]) -> pd.DataFrame:
     """Expand tagged TAFW requests (see :func:`fetch_tafw_records`) into one
-    row per weekday off, 8 hours each, deduped by ``RecordHash``.
+    row per weekday off, deduped by ``RecordHash``.
+
+    Hours per day is ``NetHours / weekday_count`` for the request, not a
+    hardcoded 8 - see the module docstring. A record whose span covers no
+    weekday (weekend-only) contributes no rows, same as before.
     """
     rows: list[dict[str, Any]] = []
     for record in records:
@@ -130,21 +137,31 @@ def expand_tafw_records_to_days(records: list[dict[str, Any]]) -> pd.DataFrame:
         start = _dt.datetime.fromisoformat(record["TimeStart"])
         end = _dt.datetime.fromisoformat(record["TimeEnd"])
         type_code = record.get("PayAdjShortName") or record.get("ReasonName")
+
+        weekdays = []
         day = start
         while day < end:
             if day.weekday() < 5:  # Mon-Fri
-                rows.append(
-                    {
-                        "XRefCode": xref_code,
-                        "Date": day.date(),
-                        "Hours": 8.0,
-                        "ReasonName": record.get("ReasonName"),
-                        "PayAdjShortName": record.get("PayAdjShortName"),
-                        "Status": str(status).title(),
-                        "RecordHash": record_hash(xref_code, day.date(), type_code, 8.0),
-                    }
-                )
+                weekdays.append(day)
             day += _dt.timedelta(days=1)
+        if not weekdays:
+            continue
+
+        net_hours = record.get("NetHours")
+        hours_per_day = float(net_hours) / len(weekdays) if net_hours is not None else 8.0
+
+        for day in weekdays:
+            rows.append(
+                {
+                    "XRefCode": xref_code,
+                    "Date": day.date(),
+                    "Hours": hours_per_day,
+                    "ReasonName": record.get("ReasonName"),
+                    "PayAdjShortName": record.get("PayAdjShortName"),
+                    "Status": str(status).title(),
+                    "RecordHash": record_hash(xref_code, day.date(), type_code, hours_per_day),
+                }
+            )
     day_df = pd.DataFrame(rows)
     if not day_df.empty:
         day_df = day_df.drop_duplicates(subset="RecordHash").reset_index(drop=True)
