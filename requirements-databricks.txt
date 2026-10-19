@@ -1,0 +1,12 @@
+# =============================================================================
+# Extra packages the Databricks notebooks install at run time.
+# =============================================================================
+# Only what tafw_ingest imports that the Databricks runtime does NOT already
+# ship. requests, urllib3, pandas, pyarrow, pydantic and pyyaml come with the
+# runtime - pinning them here (as requirements.txt does for local dev) would
+# downgrade/upgrade packages the runtime and Spark already loaded, and the
+# dev tooling (pytest, mypy, ruff, ...) has no business on a job cluster.
+#
+# Versions match requirements.txt.
+pydantic-settings==2.7.1        # tafw_ingest.config (pulls python-dotenv)
+pyrate-limiter==3.7.0           # tafw_ingest.dayforce_client pacing

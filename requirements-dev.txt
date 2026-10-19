@@ -18,7 +18,8 @@ keyring==25.7.0
 ipykernel==6.29.5
 
 # --- Notebook-aware git diff/merge -----------------------------------------
-# Registers a cell-by-cell diff/merge driver for .ipynb (see .gitattributes)
+# Registers a cell-by-cell diff/merge driver for .ipynb (see .git/info/attributes;
+# NOT a committed .gitattributes - that breaks Databricks' git integration)
 # instead of raw line-based text diffing, which is what turns "someone edited
 # a different cell" or "someone just re-ran it" into a merge conflict on the
 # whole file. One-time setup per clone after installing - see README.md.

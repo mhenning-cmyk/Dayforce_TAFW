@@ -11,11 +11,16 @@
 
 # COMMAND ----------
 
-REPO_ROOT = "/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW"
+import os
+
+# This notebook lives in <repo>/notebooks, and Databricks runs it with that
+# folder as the working directory - so this works for any clone path and for
+# Jobs, unlike a hardcoded /Workspace/Users/<you>/... path.
+REPO_ROOT = os.path.dirname(os.getcwd())
 
 # COMMAND ----------
 
-# MAGIC %pip install -r {REPO_ROOT}/requirements.txt
+# MAGIC %pip install -r {REPO_ROOT}/requirements-databricks.txt
 # MAGIC %pip install -e {REPO_ROOT} --ignore-requires-python
 
 # COMMAND ----------
@@ -28,7 +33,7 @@ import os
 import subprocess
 import sys
 
-REPO_ROOT = "/Workspace/Users/mhenning@modelpath.net/Dayforce_TAFW"
+REPO_ROOT = os.path.dirname(os.getcwd())  # restartPython() cleared it
 
 os.environ["DAYFORCE_USERNAME"] = dbutils.secrets.get("dayforce", "username")
 os.environ["DAYFORCE_PASSWORD"] = dbutils.secrets.get("dayforce", "password")

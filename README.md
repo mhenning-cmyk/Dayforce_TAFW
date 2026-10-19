@@ -204,6 +204,19 @@ hand. It has no effect on Databricks' side of the workflow at all - that side
 already has its own output-stripping policy, and there's no equivalent lever
 for the cell-aware diff/merge from this side.
 
+### Keeping the repo Databricks-compatible
+
+This repo is a Databricks Git folder, and Jobs can run it straight from git.
+Things that have broken it before, or would:
+
+| Rule | Why |
+|---|---|
+| **No committed `.gitattributes`** with `diff`/`merge`/`filter` entries; use `.git/info/attributes` | Databricks' git integration reads it and fails with "Notebook content cannot be parsed". |
+| **No hardcoded `/Workspace/Users/<you>/...` paths** in notebooks; find the repo root by walking up from `Path.cwd()` to `conf/settings.dev.yaml` | Databricks runs a notebook with its own folder as the cwd. A hardcoded path breaks in another user's clone and in Jobs, which run from a temporary checkout. |
+| **Install `requirements-databricks.txt` on Databricks, not `requirements.txt`** | `requirements.txt` pins pandas/pyarrow/pydantic/databricks-sdk and dev tools, which fight the versions the runtime already ships and has loaded. Add a package there only if `tafw_ingest` imports it and the runtime lacks it. |
+| Use `display(df)`, not `df.display()` | Only Spark DataFrames have `.display()`. The `display()` builtin works for pandas in Databricks and Jupyter. |
+| Commit `.ipynb` as valid UTF-8 JSON, and never commit with leftover `<<<<<<<` conflict markers | Databricks can't open a notebook whose JSON doesn't parse. If a pull conflicts, resolve it locally (nbdime), not in the Databricks UI. |
+
 ---
 
 ## 6. Notebook source format

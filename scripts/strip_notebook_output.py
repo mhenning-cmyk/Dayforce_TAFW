@@ -35,19 +35,22 @@ def _strip(notebook: dict) -> dict:
 
 
 def main() -> int:
-    raw = sys.stdin.read()
+    # Raw bytes in and out: sys.stdin/stdout default to the locale codepage on
+    # Windows (cp1252), which crashes on some UTF-8 sequences and writes CRLF -
+    # and a crashed filter makes git silently commit the unstripped file.
+    raw = sys.stdin.buffer.read()
     try:
-        notebook = json.loads(raw)
-    except json.JSONDecodeError:
-        sys.stdout.write(raw)
+        notebook = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        sys.stdout.buffer.write(raw)
         return 0
 
     if not isinstance(notebook, dict) or "cells" not in notebook or "nbformat" not in notebook:
-        sys.stdout.write(raw)
+        sys.stdout.buffer.write(raw)
         return 0
 
-    json.dump(_strip(notebook), sys.stdout, indent=1, ensure_ascii=False)
-    sys.stdout.write("\n")
+    text = json.dumps(_strip(notebook), indent=1, ensure_ascii=False) + "\n"
+    sys.stdout.buffer.write(text.encode("utf-8"))
     return 0
 
 
