@@ -206,7 +206,7 @@ class DayforceClient:
 
         base = base_uri or (self.TEST_BASE_URI if test_mode else self.BASE_URI)
         version = (api_version or self.API_VERSION).strip("/")
-        # e.g. https://cantest261-services.dayforcehcm.com/api/bluedrop/v1/
+        # e.g. https://can262.dayforcehcm.com/api/bluedrop/v1/
         self.api_base = f"{base.rstrip('/')}/{company_name}/{version}/"
 
         # Token bucket shared by every call this client makes. Databricks runs

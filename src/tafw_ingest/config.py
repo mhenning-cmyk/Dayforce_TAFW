@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # --- Dayforce connection ---
     # base_uri + company + api_version compose the endpoint root:
     #   {base_uri}/{company}/{api_version}/Employees
-    #   https://cantest261-services.dayforcehcm.com/api / bluedrop / v1 / Employees
+    #   https://can262.dayforcehcm.com/api / bluedrop / v1 / Employees
     dayforce_base_uri: str = "https://dayforcehcm.com/Api"
     dayforce_company: str = "bluedrop"
     dayforce_api_version: str = "v1"
@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     dayforce_throttle_seconds: float = Field(0.2, ge=0)
     tafw_lookback_days: int = Field(30, ge=0)
     tafw_horizon_days: int = Field(90, ge=1)
+    # Per-request TAFW window; Dayforce rejects spans longer than 31 days.
+    tafw_window_days: int = Field(30, ge=1, le=31)
     tafw_statuses: CsvList = ["APPROVED"]
     tafw_employee_xrefs: CsvList = []
     tafw_expand_multi_day: bool = False

@@ -157,34 +157,52 @@ spark-warehouse/
 metastore_db/
 ```
 
-### Notebook-friendly git config (run once per clone)
+### Notebook-friendly git config (run once per clone, local git only)
 
 `notebooks/dayforce_integration_service.ipynb` gets edited from two places -
 here, and live inside Databricks (running cells, and occasionally real code
 edits) - so plain git, which diffs `.ipynb` as raw JSON text, turns "someone
 just ran it" or "someone edited a different cell" into a merge conflict on
-the whole file almost every time. Two things fix that, and both need a
-one-time local registration (`.gitattributes` declares the mapping and is
-already committed, but the actual filter/driver *commands* they point at are
-deliberately not something a repo can auto-install for you - that's a git
-security boundary, not an oversight):
+the whole file almost every time.
+
+Two things fix that for **local git operations** (a plain `git merge`/`git
+pull` from your own machine's CLI). Deliberately **not** wired up via a
+committed `.gitattributes` - Databricks' own web-based git integration reads
+that file too, and (confirmed by trial) breaks with a generic "Notebook
+content cannot be parsed" error when it hits a `diff`/`merge`/`filter`
+attribute pointing at a driver that only exists in someone's local git
+config. Everything below lives in `.git/info/attributes` and local git
+config instead, which never leaves your machine and Databricks never sees:
 
 ```bash
 # 1. Notebook-aware diff/merge (compares cell-by-cell instead of raw JSON lines)
 pip install -r requirements-dev.txt   # includes nbdime
 python -m nbdime config-git --enable
 
-# 2. Strip Databricks' execution_count/outputs before every commit, so
+# 2. Strip Databricks' execution_count/outputs before every LOCAL commit, so
 #    re-running a notebook with no real changes produces no diff at all
+#    (Databricks' own workspace policy already strips outputs on ITS side -
+#    this only covers commits made from your own machine)
 git config filter.strip-notebook-output.clean "python scripts/strip_notebook_output.py"
 git config filter.strip-notebook-output.smudge cat
 git config filter.strip-notebook-output.required false
+
+# 3. Point *.ipynb at both of the above - .git/info/attributes, NOT
+#    .gitattributes, so this stays local-only and never reaches Databricks
+cat >> .git/info/attributes << 'EOF'
+*.ipynb diff=jupyternotebook
+*.ipynb merge=jupyternotebook
+*.ipynb filter=strip-notebook-output
+EOF
 ```
 
 This doesn't replace pulling before you start editing in either place - it
-just means the conflicts that do happen are real (both sides changed the
-same cell) rather than noise, and nbdime resolves the non-overlapping ones
-automatically instead of handing you a raw JSON conflict to untangle by hand.
+just means the conflicts that do happen locally are real (both sides changed
+the same cell) rather than noise, and nbdime resolves the non-overlapping
+ones automatically instead of handing you a raw JSON conflict to untangle by
+hand. It has no effect on Databricks' side of the workflow at all - that side
+already has its own output-stripping policy, and there's no equivalent lever
+for the cell-aware diff/merge from this side.
 
 ---
 
@@ -361,13 +379,13 @@ keyring set dayforce-tafw password
 ```
 
 Non-secret config already has committed defaults in
-[conf/settings.dev.yaml](conf/settings.dev.yaml) — the CANTest261 test tenant:
+[conf/settings.dev.yaml](conf/settings.dev.yaml) — the CAN262 tenant:
 
 ```yaml
-dayforce_base_uri: https://cantest261-services.dayforcehcm.com/api
+dayforce_base_uri: https://can262.dayforcehcm.com/api
 dayforce_company:  bluedrop
 dayforce_api_version: v1
-# -> https://cantest261-services.dayforcehcm.com/api/bluedrop/v1/Employees
+# -> https://can262.dayforcehcm.com/api/bluedrop/v1/Employees
 ```
 
 Override any of it (and creds, for CI) via env / [.env](.env.example):
