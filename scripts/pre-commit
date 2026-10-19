@@ -1,0 +1,3 @@
+#!/bin/sh
+# Local-only git hook - copy to .git/hooks/pre-commit (see README.md).
+exec python scripts/check_notebooks.py

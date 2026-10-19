@@ -179,10 +179,12 @@ config instead, which never leaves your machine and Databricks never sees:
 pip install -r requirements-dev.txt   # includes nbdime
 python -m nbdime config-git --enable
 
-# 2. Strip Databricks' execution_count/outputs before every LOCAL commit, so
-#    re-running a notebook with no real changes produces no diff at all
-#    (Databricks' own workspace policy already strips outputs on ITS side -
-#    this only covers commits made from your own machine)
+# 2. Before every LOCAL commit, rewrite .ipynb files into exactly the form
+#    Databricks itself writes (no outputs, execution_count 0, Databricks cell
+#    metadata, its kernelspec/language_info, no trailing newline). Otherwise
+#    Databricks rewrites the notebook on open, and the next pull in Databricks
+#    stash-conflicts and leaves conflict markers in the JSON ("Notebook failed
+#    to load"). See the docstring in scripts/strip_notebook_output.py.
 git config filter.strip-notebook-output.clean "python scripts/strip_notebook_output.py"
 git config filter.strip-notebook-output.smudge cat
 git config filter.strip-notebook-output.required false
@@ -194,7 +196,17 @@ cat >> .git/info/attributes << 'EOF'
 *.ipynb merge=jupyternotebook
 *.ipynb filter=strip-notebook-output
 EOF
+
+# 4. Refuse to commit a notebook Databricks can't open (conflict markers /
+#    broken JSON) - the filter above passes those through untouched
+cp scripts/pre-commit .git/hooks/pre-commit
 ```
+
+**If Databricks says "Notebook failed to load"** after a pull, its Git folder
+copy has conflict markers in it from a stash conflict (the repo copy is fine).
+In the Databricks Git folder dialog, discard the local changes to that notebook
+(or use **Reset** to match the remote branch), then pull again. Commit any edits
+you want to keep from Databricks *before* pulling, not after.
 
 This doesn't replace pulling before you start editing in either place - it
 just means the conflicts that do happen locally are real (both sides changed
@@ -215,7 +227,7 @@ Things that have broken it before, or would:
 | **No hardcoded `/Workspace/Users/<you>/...` paths** in notebooks; find the repo root by walking up from `Path.cwd()` to `conf/settings.dev.yaml` | Databricks runs a notebook with its own folder as the cwd. A hardcoded path breaks in another user's clone and in Jobs, which run from a temporary checkout. |
 | **Install `requirements-databricks.txt` on Databricks, not `requirements.txt`** | `requirements.txt` pins pandas/pyarrow/pydantic/databricks-sdk and dev tools, which fight the versions the runtime already ships and has loaded. Add a package there only if `tafw_ingest` imports it and the runtime lacks it. |
 | Use `display(df)`, not `df.display()` | Only Spark DataFrames have `.display()`. The `display()` builtin works for pandas in Databricks and Jupyter. |
-| Commit `.ipynb` as valid UTF-8 JSON, and never commit with leftover `<<<<<<<` conflict markers | Databricks can't open a notebook whose JSON doesn't parse. If a pull conflicts, resolve it locally (nbdime), not in the Databricks UI. |
+| Commit `.ipynb` in Databricks' own format, as valid UTF-8 JSON with no `<<<<<<<` conflict markers (the clean filter and pre-commit hook above do both) | Databricks can't open a notebook whose JSON doesn't parse. A format mismatch makes Databricks rewrite the file on open, and the next pull then stash-conflicts inside the JSON. If a pull conflicts, resolve it locally (nbdime), not in the Databricks UI. |
 
 ---
 
