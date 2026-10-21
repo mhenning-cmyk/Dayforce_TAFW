@@ -20,6 +20,8 @@ output frame exactly:
                                      expand_tafw_records_to_days's own
                                      drop_duplicates, and the MERGE match key
                                      here.
+    UpdatedDateTime  TIMESTAMP     - when this row was inserted or last changed,
+                                     stamped by the MERGE (not in tafw_day_df)
 
 This is a distinct, simpler table from :data:`tafw_ingest.staging.STAGING_DDL`,
 which backs the separate reconcile/active-tracking pipeline
@@ -69,7 +71,8 @@ CREATE TABLE IF NOT EXISTS {table} (
     ReasonName      STRING,
     PayAdjShortName STRING,
     Status          STRING       NOT NULL,
-    RecordHash      STRING       NOT NULL
+    RecordHash      STRING       NOT NULL,
+    UpdatedDateTime TIMESTAMP
 ) USING DELTA
 """
 
@@ -94,21 +97,44 @@ CREATE TABLE IF NOT EXISTS {table} (
 #: (``YYYY-MM-DD``) scope that update - without them, a run limited to one
 #: employee could wrongly cancel other employees' unrelated rows just for not
 #: appearing in this batch.
+#:
+#: ``UpdatedDateTime`` works like the employees table's: stamped with
+#: ``current_timestamp()`` when a row is inserted, and again whenever the MERGE
+#: actually changes it - a matched row whose ``Status`` / ``ReasonName`` /
+#: ``PayAdjShortName`` differ (XRefCode, Date and Hours are part of the hash,
+#: so they can't differ on a match), or a superseded row flipped to
+#: ``'Canceled'``. A matched row with nothing different is skipped entirely,
+#: so an unchanged request keeps its original ``UpdatedDateTime``. ``<=>`` is
+#: null-safe equality.
 MERGE_TAFW_DAY_RECORD_SQL = """
 MERGE INTO {table} AS t
 USING {source} AS s
 ON t.RecordHash = s.RecordHash
-WHEN MATCHED THEN UPDATE SET
+WHEN MATCHED AND (
+    NOT (t.Status <=> s.Status)
+    OR NOT (t.ReasonName <=> s.ReasonName)
+    OR NOT (t.PayAdjShortName <=> s.PayAdjShortName)
+    OR t.UpdatedDateTime IS NULL
+) THEN UPDATE SET
     t.XRefCode = s.XRefCode,
     t.Date = s.Date,
     t.Hours = s.Hours,
     t.ReasonName = s.ReasonName,
     t.PayAdjShortName = s.PayAdjShortName,
-    t.Status = s.Status
-WHEN NOT MATCHED THEN INSERT *
+    t.Status = s.Status,
+    t.UpdatedDateTime = current_timestamp()
+WHEN NOT MATCHED THEN INSERT (
+    XRefCode, Date, Hours, ReasonName, PayAdjShortName, Status, RecordHash,
+    UpdatedDateTime
+) VALUES (
+    s.XRefCode, s.Date, s.Hours, s.ReasonName, s.PayAdjShortName, s.Status, s.RecordHash,
+    current_timestamp()
+)
 WHEN NOT MATCHED BY SOURCE
     AND t.XRefCode IN ({xref_list})
     AND t.Date BETWEEN DATE '{window_start}' AND DATE '{window_end}'
     AND t.Status <> 'Canceled'
-    THEN UPDATE SET t.Status = 'Canceled'
+    THEN UPDATE SET
+        t.Status = 'Canceled',
+        t.UpdatedDateTime = current_timestamp()
 """

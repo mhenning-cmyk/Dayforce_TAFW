@@ -36,9 +36,9 @@ def test_merge_sql_matches_and_updates_on_record_hash():
         window_end="2026-12-21",
     )
     assert "ON t.RecordHash = s.RecordHash" in sql
-    assert "WHEN MATCHED THEN UPDATE SET" in sql
+    assert ") THEN UPDATE SET" in sql
     assert "t.Hours = s.Hours" in sql
-    assert "WHEN NOT MATCHED THEN INSERT *" in sql
+    assert "INSERT *" not in sql
 
 
 def test_merge_sql_cancels_stale_rows_scoped_to_run():
@@ -56,5 +56,42 @@ def test_merge_sql_cancels_stale_rows_scoped_to_run():
     assert "WHEN NOT MATCHED BY SOURCE" in sql
     assert "AND t.XRefCode IN ('H5JN095', 'H5JN002')" in sql
     assert "AND t.Date BETWEEN DATE '2026-08-23' AND DATE '2026-12-21'" in sql
-    assert "THEN UPDATE SET t.Status = 'Canceled'" in sql
+    cancel = sql.split("WHEN NOT MATCHED BY SOURCE", 1)[1]
+    assert "t.Status = 'Canceled'" in cancel
+    assert "t.UpdatedDateTime = current_timestamp()" in cancel
     assert "THEN DELETE" not in sql
+
+
+def _merge_sql() -> str:
+    return MERGE_TAFW_DAY_RECORD_SQL.format(
+        table="t",
+        source="s",
+        xref_list=sql_string_list(["H5JN095"]),
+        window_start="2026-08-23",
+        window_end="2026-12-21",
+    )
+
+
+def test_create_table_sql_has_updated_datetime():
+    sql = CREATE_TAFW_DAY_RECORD_TABLE_SQL.format(table="x")
+    assert "UpdatedDateTime TIMESTAMP" in sql
+
+
+def test_merge_sql_stamps_updated_datetime_on_insert():
+    insert = _merge_sql().split("WHEN NOT MATCHED THEN INSERT", 1)[1]
+    insert = insert.split("WHEN NOT MATCHED BY SOURCE", 1)[0]
+    assert "UpdatedDateTime" in insert
+    assert "current_timestamp()" in insert
+
+
+def test_merge_sql_skips_unchanged_matched_rows():
+    """Unchanged requests must keep their original UpdatedDateTime, so the
+    matched branch only fires when something mutable actually differs."""
+    sql = _merge_sql()
+    assert "WHEN MATCHED THEN" not in sql
+    condition = sql.split("WHEN MATCHED AND (", 1)[1].split(") THEN UPDATE SET", 1)[0]
+    for column in ("Status", "ReasonName", "PayAdjShortName"):
+        assert f"NOT (t.{column} <=> s.{column})" in condition
+    assert "t.UpdatedDateTime IS NULL" in condition
+    update = sql.split(") THEN UPDATE SET", 1)[1].split("WHEN NOT MATCHED", 1)[0]
+    assert "t.UpdatedDateTime = current_timestamp()" in update
