@@ -1,0 +1,30 @@
+# Flags a push that Databricks won't be able to load: a notebook that isn't
+# valid nbformat-4 JSON, or merge-conflict markers left in any file. Runs on
+# every push - including commits made from the Databricks Git folder, which
+# skip the local pre-commit hook (scripts/pre-commit). This can't block a
+# push to main; it marks the commit with a failed check so it's caught early.
+name: Check notebooks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Notebooks are valid JSON with no conflict markers
+        run: python scripts/check_notebooks.py --all
+
+      - name: No conflict markers in other files
+        run: |
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)' -- . ':!*.ipynb'; then
+            echo "::error::Merge-conflict markers found (lines above) - resolve them and push again."
+            exit 1
+          fi

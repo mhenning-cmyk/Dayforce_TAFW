@@ -44,15 +44,27 @@ def _problem(raw: bytes) -> str | None:
     return None
 
 
+def _committed_notebooks() -> list[str]:
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.ipynb"], check=True, capture_output=True
+    ).stdout
+    return [p.decode("utf-8") for p in out.split(b"\0") if p]
+
+
 def main() -> int:
+    # --all: check every notebook in HEAD instead of the staged ones. Used by CI
+    # (.github/workflows/check-notebooks.yml), which also sees commits made from
+    # the Databricks Git folder - those never run this repo's pre-commit hook.
+    check_all = "--all" in sys.argv[1:]
+    paths, rev = (_committed_notebooks(), "HEAD:") if check_all else (_staged_notebooks(), ":")
     failed = False
-    for path in _staged_notebooks():
-        raw = subprocess.run(["git", "show", f":{path}"], check=True, capture_output=True).stdout
+    for path in paths:
+        raw = subprocess.run(["git", "show", f"{rev}{path}"], check=True, capture_output=True).stdout
         problem = _problem(raw)
         if problem:
             failed = True
             sys.stderr.write(f"check_notebooks: {path} {problem} - Databricks can't load it.\n")
-    if failed:
+    if failed and not check_all:
         sys.stderr.write("Fix the notebook(s) above, `git add` them again, then commit.\n")
     return 1 if failed else 0
 

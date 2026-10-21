@@ -17,10 +17,13 @@ So before a notebook is written to a local commit, this filter:
   "someone just ran it" never shows up as a change;
 * gives every cell Databricks' ``application/vnd.databricks.v1+cell``
   metadata (a cell added in VS Code has none, so Databricks would add it);
-* cell ``id`` fields: a notebook with no ids is pinned to ``nbformat_minor``
-  0 (Databricks' own value). A notebook where any cell has an id gets one on
-  every cell (the cell's nuid) and ``nbformat_minor`` 5 - ids are only valid
-  from 4.5, and a 4.0 file carrying them is an invalid notebook;
+* removes every cell ``id`` and pins ``nbformat_minor`` to 0 - that is what
+  Databricks writes (every commit made from the Databricks Git folder has no
+  ids and minor 0). Keeping the ids VS Code adds made each local commit touch
+  *every* cell, so any edit made in Databricks in the meantime - anywhere in
+  the notebook - collided with it on the next pull (commit 4a93a14 is one of
+  those: a hand-resolved conflict that left a stray ``=======`` behind).
+  Databricks identifies cells by their ``nuid``, not ``id``;
 * replaces kernelspec / language_info with Databricks' values;
 * serializes like Databricks: 1-space indent, sorted keys, raw UTF-8, no
   trailing newline.
@@ -76,31 +79,19 @@ def _databricks_cell_metadata(cell: dict, index: int) -> None:
 
 
 def _normalize(notebook: dict) -> dict:
-    cells = notebook.get("cells", [])
-    with_ids = any(cell.get("id") for cell in cells)
-    seen_ids: set[str] = set()
-    for index, cell in enumerate(cells):
+    for index, cell in enumerate(notebook.get("cells", [])):
         cell["source"] = _source_lines(_source_text(cell))
         if cell.get("cell_type") == "code":
             cell["execution_count"] = 0
             cell["outputs"] = []
         _databricks_cell_metadata(cell, index)
-        if with_ids:
-            # Keep an existing id; a missing or duplicate one (e.g. a cell
-            # copy-pasted in VS Code) becomes the cell's nuid.
-            cell_id = cell.get("id")
-            if not cell_id or cell_id in seen_ids:
-                cell_id = cell["metadata"]["application/vnd.databricks.v1+cell"]["nuid"]
-            cell["id"] = cell_id
-            seen_ids.add(cell_id)
-        else:
-            cell.pop("id", None)
+        cell.pop("id", None)
 
     metadata = notebook.setdefault("metadata", {})
     metadata["kernelspec"] = dict(DATABRICKS_KERNELSPEC)
     metadata["language_info"] = dict(DATABRICKS_LANGUAGE_INFO)
     notebook["nbformat"] = 4
-    notebook["nbformat_minor"] = 5 if with_ids else 0
+    notebook["nbformat_minor"] = 0
     return notebook
 
 
