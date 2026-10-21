@@ -14,6 +14,7 @@ from tafw_ingest.employees import (
     get_department_task_id,
     get_employee_department,
     get_employee_display_name,
+    get_employee_employment_status,
 )
 
 BASE = "https://dayforcehcm.com/Api/bluedrop/v1/Employees"
@@ -189,6 +190,9 @@ def test_fetch_employee_department(client, requests_mock):
                 "EmployeeNumber": "H5JN995",
                 "XRefCode": "H5JN995",
                 "DisplayName": "Woodland, Jason",
+                "EmploymentStatuses": {
+                    "Items": [{"EmploymentStatus": {"XRefCode": "ACTIVE"}}]
+                },
                 "WorkAssignments": {
                     "Items": [
                         _work_assignment(
@@ -206,11 +210,17 @@ def test_fetch_employee_department(client, requests_mock):
 
     df = fetch_employee_department(client, "H5JN995")
 
-    assert requests_mock.last_request.qs["expand"] == ["workassignments"]
-    assert list(df.columns) == ["XRefCode", "DisplayName", "DepartmentXRefCode"]
+    assert requests_mock.last_request.qs["expand"] == ["workassignments,employmentstatuses"]
+    assert list(df.columns) == [
+        "XRefCode",
+        "DisplayName",
+        "DepartmentXRefCode",
+        "EmploymentStatus",
+    ]
     assert df.iloc[0]["XRefCode"] == "H5JN995"
     assert df.iloc[0]["DisplayName"] == "Woodland, Jason"
     assert df.iloc[0]["DepartmentXRefCode"] == "BTSI_SIMULATION_PRODUCT"
+    assert df.iloc[0]["EmploymentStatus"] == "ACTIVE"
 
 
 def test_get_employee_display_name():
@@ -218,13 +228,58 @@ def test_get_employee_display_name():
     assert get_employee_display_name({"XRefCode": "H5JN1"}) is None
 
 
-def _mock_employee(requests_mock, xref_code, *, display_name, department_xref):
+def test_get_employee_employment_status():
+    employee = {
+        "EmploymentStatuses": {
+            "Items": [
+                {
+                    "EmploymentStatus": {
+                        "XRefCode": "TERMINATED",
+                        "ShortName": "Terminated",
+                        "LongName": "Terminated",
+                    }
+                }
+            ]
+        }
+    }
+    assert get_employee_employment_status(employee) == "TERMINATED"
+
+
+def test_get_employee_employment_status_prefers_latest_effective_start():
+    employee = {
+        "EmploymentStatuses": {
+            "Items": [
+                {
+                    "EffectiveStart": "2026-09-01T00:00:00",
+                    "EmploymentStatus": {"XRefCode": "TERMINATED"},
+                },
+                {
+                    "EffectiveStart": "2019-03-04T00:00:00",
+                    "EmploymentStatus": {"XRefCode": "ACTIVE"},
+                },
+            ]
+        }
+    }
+    assert get_employee_employment_status(employee) == "TERMINATED"
+
+
+def test_get_employee_employment_status_missing():
+    assert get_employee_employment_status({"XRefCode": "H5JN1"}) is None
+    assert get_employee_employment_status({"EmploymentStatuses": {"Items": []}}) is None
+
+
+def _mock_employee(
+    requests_mock, xref_code, *, display_name, department_xref, employment_status="ACTIVE"
+):
     requests_mock.get(
         f"{BASE}/{xref_code}",
         json={
             "Data": {
                 "XRefCode": xref_code,
                 "DisplayName": display_name,
+                "EmploymentStatuses": {
+                    "Items": [{"EmploymentStatus": {"XRefCode": employment_status}}]
+                },
                 "WorkAssignments": {
                     "Items": [_work_assignment({"XRefCode": department_xref})]
                 },
@@ -269,6 +324,31 @@ def test_build_employee_department_rows_dedupes_xref_codes(client, requests_mock
     rows = build_employee_department_rows(client, ["H5JN001", "H5JN001"], dept_map)
 
     assert len(rows) == 1
+
+
+def test_build_employee_department_rows_includes_employment_status(
+    client, requests_mock
+):
+    """Terminated employees are kept (status is a column, not a filter)."""
+    dept_map = DepartmentMap({"BTSI_SERVICES": ProjectTask(96732, 3431175)})
+    _mock_employee(
+        requests_mock, "H5JN001", display_name="Still, Here", department_xref="BTSI_SERVICES"
+    )
+    _mock_employee(
+        requests_mock,
+        "H5JN002",
+        display_name="Gone, Now",
+        department_xref="BTSI_SERVICES",
+        employment_status="TERMINATED",
+    )
+
+    rows = build_employee_department_rows(client, ["H5JN001", "H5JN002"], dept_map)
+
+    assert {row["XRefCode"]: row["employment_status"] for row in rows} == {
+        "H5JN001": "ACTIVE",
+        "H5JN002": "TERMINATED",
+    }
+    assert all("UpdatedDateTime" not in row for row in rows)
 
 
 def test_build_employee_department_rows_empty_when_all_out_of_scope(

@@ -32,6 +32,7 @@ __all__ = [
     "fetch_employees_dataframe",
     "get_employee_department",
     "get_employee_display_name",
+    "get_employee_employment_status",
     "fetch_employee_department",
     "get_department_project_id",
     "get_department_task_id",
@@ -53,6 +54,11 @@ _PREFERRED_ORDER = [
 #: Only employees whose XRefCode starts with this prefix are in scope for
 #: this service - everyone else is dropped in employees_to_dataframe.
 _IN_SCOPE_XREF_PREFIX = "H5JN"
+
+#: Sub-collections expanded on the per-employee ``GET /Employees/{xref}`` call -
+#: department (WorkAssignments) and employment status (EmploymentStatuses)
+#: come back on the same request, so status costs no extra API calls.
+_EMPLOYEE_DETAIL_EXPAND = "WorkAssignments,EmploymentStatuses"
 
 
 def employees_to_dataframe(rows: Iterable[dict[str, Any]]) -> pd.DataFrame:
@@ -138,21 +144,43 @@ def get_employee_display_name(employee: dict[str, Any]) -> str | None:
     return employee.get("DisplayName")
 
 
-def fetch_employee_department(client: DayforceClient, xref_code: str) -> pd.DataFrame:
-    """Look up one employee's work assignment and return their name/department.
+def get_employee_employment_status(employee: dict[str, Any]) -> str | None:
+    """Pull the ``EmploymentStatus.XRefCode`` off an ``expand=EmploymentStatuses`` record.
 
-    Calls ``GET /Employees/{xref}?expand=WorkAssignments`` and returns a
-    one-row DataFrame with ``XRefCode``, ``DisplayName``, and
-    ``DepartmentXRefCode`` (the assignment's ``Department.XRefCode``, or
-    ``None`` if the employee has no work assignment on file).
+    Values seen on the Bluedrop tenant: ``ACTIVE``, ``INACTIVE``,
+    ``TERMINATED`` (``PRESTART`` is valid but unused). ``EmploymentStatuses.Items``
+    is normally just the current status; if Dayforce returns several, the one
+    with the latest ``EffectiveStart`` is used. Returns ``None`` if there is no
+    status on file.
     """
-    employee = client.get_employee_work_assignments(xref_code)
+    statuses = employee.get("EmploymentStatuses")
+    items = statuses.get("Items") if isinstance(statuses, dict) else None
+    items = [item for item in items or [] if isinstance(item, dict)]
+    if not items:
+        return None
+
+    current = max(items, key=lambda item: str(item.get("EffectiveStart") or ""))
+    status = current.get("EmploymentStatus") or {}
+    return status.get("XRefCode") if isinstance(status, dict) else None
+
+
+def fetch_employee_department(client: DayforceClient, xref_code: str) -> pd.DataFrame:
+    """Look up one employee's work assignment and return their name/department/status.
+
+    Calls ``GET /Employees/{xref}?expand=WorkAssignments,EmploymentStatuses``
+    and returns a one-row DataFrame with ``XRefCode``, ``DisplayName``,
+    ``DepartmentXRefCode`` (the assignment's ``Department.XRefCode``, or
+    ``None`` if the employee has no work assignment on file), and
+    ``EmploymentStatus`` (e.g. ``"ACTIVE"`` / ``"TERMINATED"``, or ``None``).
+    """
+    employee = client.get_employee(xref_code, expand=_EMPLOYEE_DETAIL_EXPAND)
     return pd.DataFrame(
         [
             {
                 "XRefCode": employee.get("XRefCode", xref_code),
                 "DisplayName": get_employee_display_name(employee),
                 "DepartmentXRefCode": get_employee_department(employee),
+                "EmploymentStatus": get_employee_employment_status(employee),
             }
         ]
     )
@@ -196,7 +224,9 @@ def build_employee_department_rows(
     """Per-employee name/department/project/task rows, ready to upload.
 
     One dict per XRefCode: ``XRefCode``, ``employee_name``,
-    ``DepartmentXRefCode``, ``ProjectId``, ``TaskId``. De-duped defensively in
+    ``DepartmentXRefCode``, ``ProjectId``, ``TaskId``, ``employment_status``.
+    ``UpdatedDateTime`` is not set here - the Databricks MERGE stamps it (see
+    :mod:`tafw_ingest.employee_department_queries`). De-duped defensively in
     case ``xref_codes`` repeats one. Employees whose department doesn't
     resolve to a ``ProjectId`` (out of scope) are dropped from the returned
     list entirely - not just filtered from a display copy - since a TAFW
@@ -215,5 +245,6 @@ def build_employee_department_rows(
             "DepartmentXRefCode": department_xref,
             "ProjectId": get_department_project_id(department_xref, dept_map),
             "TaskId": get_department_task_id(department_xref, dept_map),
+            "employment_status": department_df.iloc[0]["EmploymentStatus"],
         }
     return [row for row in rows.values() if row["ProjectId"] is not None]
