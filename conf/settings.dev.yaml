@@ -4,15 +4,15 @@
 #
 # Precedence (low -> high): this file < keyring (creds only) < env / .env < kwargs.
 
-<<<<<<< Updated upstream
+
 # Dayforce CAN262 tenant. Endpoint root resolves to:
 #   https://can262.dayforcehcm.com/api/bluedrop/v1/Employees
-dayforce_base_uri: https://can262.dayforcehcm.com/api
-=======
+#dayforce_base_uri: https://can262.dayforcehcm.com/api
+
 # Dayforce CANTest262 test tenant. Endpoint root resolves to:
 #   https://cantest262.dayforcehcm.com/api/bluedrop/v1/Employees
-dayforce_base_uri: https://can262.dayforcehcm.com
->>>>>>> Stashed changes
+dayforce_base_uri: https://can262.dayforcehcm.com/api
+
 dayforce_company: bluedrop
 dayforce_api_version: v1
 dayforce_auth_mode: basic
